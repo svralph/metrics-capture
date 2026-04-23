@@ -1,0 +1,42 @@
+{
+    "components": [
+        {
+            "name": "c",
+            "type": "camera",
+            "model": "fake",
+            "frame": {
+                "parent": "pieceGripper"
+            }
+        },
+        {
+            "name": "pieceGripper",
+            "type": "gripper",
+            "model": "fake",
+            "frame": {
+                "parent": "pieceArm"
+            }
+        },
+        {
+            "name": "pieceArm",
+            "type": "arm",
+            "model": "fake",
+            "attributes": {
+                "arm-model": "ur5e"
+            },
+            "frame": {
+                "parent": "world",
+                "geometry": {
+                  "type": "box",
+                  "x": 50,
+                  "y": 50,
+                  "z": 50,
+                  "translation": {
+                    "x": 0,
+                    "y": 0,
+                    "z": 0
+                  }
+                }
+            }
+        }
+    ]
+}

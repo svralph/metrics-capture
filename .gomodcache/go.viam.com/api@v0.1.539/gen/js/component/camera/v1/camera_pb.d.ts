@@ -1,0 +1,417 @@
+// package: viam.component.camera.v1
+// file: component/camera/v1/camera.proto
+
+import * as jspb from "google-protobuf";
+import * as app_data_v1_data_pb from "../../../app/data/v1/data_pb";
+import * as common_v1_common_pb from "../../../common/v1/common_pb";
+import * as google_api_annotations_pb from "../../../google/api/annotations_pb";
+import * as google_protobuf_struct_pb from "google-protobuf/google/protobuf/struct_pb";
+
+export class GetImagesRequest extends jspb.Message {
+  getName(): string;
+  setName(value: string): void;
+
+  clearFilterSourceNamesList(): void;
+  getFilterSourceNamesList(): Array<string>;
+  setFilterSourceNamesList(value: Array<string>): void;
+  addFilterSourceNames(value: string, index?: number): string;
+
+  hasExtra(): boolean;
+  clearExtra(): void;
+  getExtra(): google_protobuf_struct_pb.Struct | undefined;
+  setExtra(value?: google_protobuf_struct_pb.Struct): void;
+
+  serializeBinary(): Uint8Array;
+  toObject(includeInstance?: boolean): GetImagesRequest.AsObject;
+  static toObject(includeInstance: boolean, msg: GetImagesRequest): GetImagesRequest.AsObject;
+  static extensions: {[key: number]: jspb.ExtensionFieldInfo<jspb.Message>};
+  static extensionsBinary: {[key: number]: jspb.ExtensionFieldBinaryInfo<jspb.Message>};
+  static serializeBinaryToWriter(message: GetImagesRequest, writer: jspb.BinaryWriter): void;
+  static deserializeBinary(bytes: Uint8Array): GetImagesRequest;
+  static deserializeBinaryFromReader(message: GetImagesRequest, reader: jspb.BinaryReader): GetImagesRequest;
+}
+
+export namespace GetImagesRequest {
+  export type AsObject = {
+    name: string,
+    filterSourceNamesList: Array<string>,
+    extra?: google_protobuf_struct_pb.Struct.AsObject,
+  }
+}
+
+export class GetImagesResponse extends jspb.Message {
+  clearImagesList(): void;
+  getImagesList(): Array<Image>;
+  setImagesList(value: Array<Image>): void;
+  addImages(value?: Image, index?: number): Image;
+
+  hasResponseMetadata(): boolean;
+  clearResponseMetadata(): void;
+  getResponseMetadata(): common_v1_common_pb.ResponseMetadata | undefined;
+  setResponseMetadata(value?: common_v1_common_pb.ResponseMetadata): void;
+
+  serializeBinary(): Uint8Array;
+  toObject(includeInstance?: boolean): GetImagesResponse.AsObject;
+  static toObject(includeInstance: boolean, msg: GetImagesResponse): GetImagesResponse.AsObject;
+  static extensions: {[key: number]: jspb.ExtensionFieldInfo<jspb.Message>};
+  static extensionsBinary: {[key: number]: jspb.ExtensionFieldBinaryInfo<jspb.Message>};
+  static serializeBinaryToWriter(message: GetImagesResponse, writer: jspb.BinaryWriter): void;
+  static deserializeBinary(bytes: Uint8Array): GetImagesResponse;
+  static deserializeBinaryFromReader(message: GetImagesResponse, reader: jspb.BinaryReader): GetImagesResponse;
+}
+
+export namespace GetImagesResponse {
+  export type AsObject = {
+    imagesList: Array<Image.AsObject>,
+    responseMetadata?: common_v1_common_pb.ResponseMetadata.AsObject,
+  }
+}
+
+export class Image extends jspb.Message {
+  getSourceName(): string;
+  setSourceName(value: string): void;
+
+  getImage(): Uint8Array | string;
+  getImage_asU8(): Uint8Array;
+  getImage_asB64(): string;
+  setImage(value: Uint8Array | string): void;
+
+  getMimeType(): string;
+  setMimeType(value: string): void;
+
+  hasAnnotations(): boolean;
+  clearAnnotations(): void;
+  getAnnotations(): app_data_v1_data_pb.Annotations | undefined;
+  setAnnotations(value?: app_data_v1_data_pb.Annotations): void;
+
+  serializeBinary(): Uint8Array;
+  toObject(includeInstance?: boolean): Image.AsObject;
+  static toObject(includeInstance: boolean, msg: Image): Image.AsObject;
+  static extensions: {[key: number]: jspb.ExtensionFieldInfo<jspb.Message>};
+  static extensionsBinary: {[key: number]: jspb.ExtensionFieldBinaryInfo<jspb.Message>};
+  static serializeBinaryToWriter(message: Image, writer: jspb.BinaryWriter): void;
+  static deserializeBinary(bytes: Uint8Array): Image;
+  static deserializeBinaryFromReader(message: Image, reader: jspb.BinaryReader): Image;
+}
+
+export namespace Image {
+  export type AsObject = {
+    sourceName: string,
+    image: Uint8Array | string,
+    mimeType: string,
+    annotations?: app_data_v1_data_pb.Annotations.AsObject,
+  }
+}
+
+export class GetPointCloudRequest extends jspb.Message {
+  getName(): string;
+  setName(value: string): void;
+
+  getMimeType(): string;
+  setMimeType(value: string): void;
+
+  hasExtra(): boolean;
+  clearExtra(): void;
+  getExtra(): google_protobuf_struct_pb.Struct | undefined;
+  setExtra(value?: google_protobuf_struct_pb.Struct): void;
+
+  serializeBinary(): Uint8Array;
+  toObject(includeInstance?: boolean): GetPointCloudRequest.AsObject;
+  static toObject(includeInstance: boolean, msg: GetPointCloudRequest): GetPointCloudRequest.AsObject;
+  static extensions: {[key: number]: jspb.ExtensionFieldInfo<jspb.Message>};
+  static extensionsBinary: {[key: number]: jspb.ExtensionFieldBinaryInfo<jspb.Message>};
+  static serializeBinaryToWriter(message: GetPointCloudRequest, writer: jspb.BinaryWriter): void;
+  static deserializeBinary(bytes: Uint8Array): GetPointCloudRequest;
+  static deserializeBinaryFromReader(message: GetPointCloudRequest, reader: jspb.BinaryReader): GetPointCloudRequest;
+}
+
+export namespace GetPointCloudRequest {
+  export type AsObject = {
+    name: string,
+    mimeType: string,
+    extra?: google_protobuf_struct_pb.Struct.AsObject,
+  }
+}
+
+export class GetPointCloudResponse extends jspb.Message {
+  getMimeType(): string;
+  setMimeType(value: string): void;
+
+  getPointCloud(): Uint8Array | string;
+  getPointCloud_asU8(): Uint8Array;
+  getPointCloud_asB64(): string;
+  setPointCloud(value: Uint8Array | string): void;
+
+  serializeBinary(): Uint8Array;
+  toObject(includeInstance?: boolean): GetPointCloudResponse.AsObject;
+  static toObject(includeInstance: boolean, msg: GetPointCloudResponse): GetPointCloudResponse.AsObject;
+  static extensions: {[key: number]: jspb.ExtensionFieldInfo<jspb.Message>};
+  static extensionsBinary: {[key: number]: jspb.ExtensionFieldBinaryInfo<jspb.Message>};
+  static serializeBinaryToWriter(message: GetPointCloudResponse, writer: jspb.BinaryWriter): void;
+  static deserializeBinary(bytes: Uint8Array): GetPointCloudResponse;
+  static deserializeBinaryFromReader(message: GetPointCloudResponse, reader: jspb.BinaryReader): GetPointCloudResponse;
+}
+
+export namespace GetPointCloudResponse {
+  export type AsObject = {
+    mimeType: string,
+    pointCloud: Uint8Array | string,
+  }
+}
+
+export class GetPropertiesRequest extends jspb.Message {
+  getName(): string;
+  setName(value: string): void;
+
+  serializeBinary(): Uint8Array;
+  toObject(includeInstance?: boolean): GetPropertiesRequest.AsObject;
+  static toObject(includeInstance: boolean, msg: GetPropertiesRequest): GetPropertiesRequest.AsObject;
+  static extensions: {[key: number]: jspb.ExtensionFieldInfo<jspb.Message>};
+  static extensionsBinary: {[key: number]: jspb.ExtensionFieldBinaryInfo<jspb.Message>};
+  static serializeBinaryToWriter(message: GetPropertiesRequest, writer: jspb.BinaryWriter): void;
+  static deserializeBinary(bytes: Uint8Array): GetPropertiesRequest;
+  static deserializeBinaryFromReader(message: GetPropertiesRequest, reader: jspb.BinaryReader): GetPropertiesRequest;
+}
+
+export namespace GetPropertiesRequest {
+  export type AsObject = {
+    name: string,
+  }
+}
+
+export class GetPropertiesResponse extends jspb.Message {
+  getSupportsPcd(): boolean;
+  setSupportsPcd(value: boolean): void;
+
+  hasIntrinsicParameters(): boolean;
+  clearIntrinsicParameters(): void;
+  getIntrinsicParameters(): IntrinsicParameters | undefined;
+  setIntrinsicParameters(value?: IntrinsicParameters): void;
+
+  hasDistortionParameters(): boolean;
+  clearDistortionParameters(): void;
+  getDistortionParameters(): DistortionParameters | undefined;
+  setDistortionParameters(value?: DistortionParameters): void;
+
+  clearMimeTypesList(): void;
+  getMimeTypesList(): Array<string>;
+  setMimeTypesList(value: Array<string>): void;
+  addMimeTypes(value: string, index?: number): string;
+
+  hasFrameRate(): boolean;
+  clearFrameRate(): void;
+  getFrameRate(): number;
+  setFrameRate(value: number): void;
+
+  hasExtrinsicParameters(): boolean;
+  clearExtrinsicParameters(): void;
+  getExtrinsicParameters(): ExtrinsicParameters | undefined;
+  setExtrinsicParameters(value?: ExtrinsicParameters): void;
+
+  serializeBinary(): Uint8Array;
+  toObject(includeInstance?: boolean): GetPropertiesResponse.AsObject;
+  static toObject(includeInstance: boolean, msg: GetPropertiesResponse): GetPropertiesResponse.AsObject;
+  static extensions: {[key: number]: jspb.ExtensionFieldInfo<jspb.Message>};
+  static extensionsBinary: {[key: number]: jspb.ExtensionFieldBinaryInfo<jspb.Message>};
+  static serializeBinaryToWriter(message: GetPropertiesResponse, writer: jspb.BinaryWriter): void;
+  static deserializeBinary(bytes: Uint8Array): GetPropertiesResponse;
+  static deserializeBinaryFromReader(message: GetPropertiesResponse, reader: jspb.BinaryReader): GetPropertiesResponse;
+}
+
+export namespace GetPropertiesResponse {
+  export type AsObject = {
+    supportsPcd: boolean,
+    intrinsicParameters?: IntrinsicParameters.AsObject,
+    distortionParameters?: DistortionParameters.AsObject,
+    mimeTypesList: Array<string>,
+    frameRate: number,
+    extrinsicParameters?: ExtrinsicParameters.AsObject,
+  }
+}
+
+export class Webcams extends jspb.Message {
+  clearWebcamsList(): void;
+  getWebcamsList(): Array<Webcam>;
+  setWebcamsList(value: Array<Webcam>): void;
+  addWebcams(value?: Webcam, index?: number): Webcam;
+
+  serializeBinary(): Uint8Array;
+  toObject(includeInstance?: boolean): Webcams.AsObject;
+  static toObject(includeInstance: boolean, msg: Webcams): Webcams.AsObject;
+  static extensions: {[key: number]: jspb.ExtensionFieldInfo<jspb.Message>};
+  static extensionsBinary: {[key: number]: jspb.ExtensionFieldBinaryInfo<jspb.Message>};
+  static serializeBinaryToWriter(message: Webcams, writer: jspb.BinaryWriter): void;
+  static deserializeBinary(bytes: Uint8Array): Webcams;
+  static deserializeBinaryFromReader(message: Webcams, reader: jspb.BinaryReader): Webcams;
+}
+
+export namespace Webcams {
+  export type AsObject = {
+    webcamsList: Array<Webcam.AsObject>,
+  }
+}
+
+export class Webcam extends jspb.Message {
+  getLabel(): string;
+  setLabel(value: string): void;
+
+  getStatus(): string;
+  setStatus(value: string): void;
+
+  clearPropertiesList(): void;
+  getPropertiesList(): Array<Property>;
+  setPropertiesList(value: Array<Property>): void;
+  addProperties(value?: Property, index?: number): Property;
+
+  getName(): string;
+  setName(value: string): void;
+
+  getId(): string;
+  setId(value: string): void;
+
+  serializeBinary(): Uint8Array;
+  toObject(includeInstance?: boolean): Webcam.AsObject;
+  static toObject(includeInstance: boolean, msg: Webcam): Webcam.AsObject;
+  static extensions: {[key: number]: jspb.ExtensionFieldInfo<jspb.Message>};
+  static extensionsBinary: {[key: number]: jspb.ExtensionFieldBinaryInfo<jspb.Message>};
+  static serializeBinaryToWriter(message: Webcam, writer: jspb.BinaryWriter): void;
+  static deserializeBinary(bytes: Uint8Array): Webcam;
+  static deserializeBinaryFromReader(message: Webcam, reader: jspb.BinaryReader): Webcam;
+}
+
+export namespace Webcam {
+  export type AsObject = {
+    label: string,
+    status: string,
+    propertiesList: Array<Property.AsObject>,
+    name: string,
+    id: string,
+  }
+}
+
+export class Property extends jspb.Message {
+  getWidthPx(): number;
+  setWidthPx(value: number): void;
+
+  getHeightPx(): number;
+  setHeightPx(value: number): void;
+
+  getFrameFormat(): string;
+  setFrameFormat(value: string): void;
+
+  getFrameRate(): number;
+  setFrameRate(value: number): void;
+
+  serializeBinary(): Uint8Array;
+  toObject(includeInstance?: boolean): Property.AsObject;
+  static toObject(includeInstance: boolean, msg: Property): Property.AsObject;
+  static extensions: {[key: number]: jspb.ExtensionFieldInfo<jspb.Message>};
+  static extensionsBinary: {[key: number]: jspb.ExtensionFieldBinaryInfo<jspb.Message>};
+  static serializeBinaryToWriter(message: Property, writer: jspb.BinaryWriter): void;
+  static deserializeBinary(bytes: Uint8Array): Property;
+  static deserializeBinaryFromReader(message: Property, reader: jspb.BinaryReader): Property;
+}
+
+export namespace Property {
+  export type AsObject = {
+    widthPx: number,
+    heightPx: number,
+    frameFormat: string,
+    frameRate: number,
+  }
+}
+
+export class IntrinsicParameters extends jspb.Message {
+  getWidthPx(): number;
+  setWidthPx(value: number): void;
+
+  getHeightPx(): number;
+  setHeightPx(value: number): void;
+
+  getFocalXPx(): number;
+  setFocalXPx(value: number): void;
+
+  getFocalYPx(): number;
+  setFocalYPx(value: number): void;
+
+  getCenterXPx(): number;
+  setCenterXPx(value: number): void;
+
+  getCenterYPx(): number;
+  setCenterYPx(value: number): void;
+
+  serializeBinary(): Uint8Array;
+  toObject(includeInstance?: boolean): IntrinsicParameters.AsObject;
+  static toObject(includeInstance: boolean, msg: IntrinsicParameters): IntrinsicParameters.AsObject;
+  static extensions: {[key: number]: jspb.ExtensionFieldInfo<jspb.Message>};
+  static extensionsBinary: {[key: number]: jspb.ExtensionFieldBinaryInfo<jspb.Message>};
+  static serializeBinaryToWriter(message: IntrinsicParameters, writer: jspb.BinaryWriter): void;
+  static deserializeBinary(bytes: Uint8Array): IntrinsicParameters;
+  static deserializeBinaryFromReader(message: IntrinsicParameters, reader: jspb.BinaryReader): IntrinsicParameters;
+}
+
+export namespace IntrinsicParameters {
+  export type AsObject = {
+    widthPx: number,
+    heightPx: number,
+    focalXPx: number,
+    focalYPx: number,
+    centerXPx: number,
+    centerYPx: number,
+  }
+}
+
+export class DistortionParameters extends jspb.Message {
+  getModel(): string;
+  setModel(value: string): void;
+
+  clearParametersList(): void;
+  getParametersList(): Array<number>;
+  setParametersList(value: Array<number>): void;
+  addParameters(value: number, index?: number): number;
+
+  serializeBinary(): Uint8Array;
+  toObject(includeInstance?: boolean): DistortionParameters.AsObject;
+  static toObject(includeInstance: boolean, msg: DistortionParameters): DistortionParameters.AsObject;
+  static extensions: {[key: number]: jspb.ExtensionFieldInfo<jspb.Message>};
+  static extensionsBinary: {[key: number]: jspb.ExtensionFieldBinaryInfo<jspb.Message>};
+  static serializeBinaryToWriter(message: DistortionParameters, writer: jspb.BinaryWriter): void;
+  static deserializeBinary(bytes: Uint8Array): DistortionParameters;
+  static deserializeBinaryFromReader(message: DistortionParameters, reader: jspb.BinaryReader): DistortionParameters;
+}
+
+export namespace DistortionParameters {
+  export type AsObject = {
+    model: string,
+    parametersList: Array<number>,
+  }
+}
+
+export class ExtrinsicParameters extends jspb.Message {
+  hasTranslation(): boolean;
+  clearTranslation(): void;
+  getTranslation(): common_v1_common_pb.Vector3 | undefined;
+  setTranslation(value?: common_v1_common_pb.Vector3): void;
+
+  hasOrientation(): boolean;
+  clearOrientation(): void;
+  getOrientation(): common_v1_common_pb.Orientation | undefined;
+  setOrientation(value?: common_v1_common_pb.Orientation): void;
+
+  serializeBinary(): Uint8Array;
+  toObject(includeInstance?: boolean): ExtrinsicParameters.AsObject;
+  static toObject(includeInstance: boolean, msg: ExtrinsicParameters): ExtrinsicParameters.AsObject;
+  static extensions: {[key: number]: jspb.ExtensionFieldInfo<jspb.Message>};
+  static extensionsBinary: {[key: number]: jspb.ExtensionFieldBinaryInfo<jspb.Message>};
+  static serializeBinaryToWriter(message: ExtrinsicParameters, writer: jspb.BinaryWriter): void;
+  static deserializeBinary(bytes: Uint8Array): ExtrinsicParameters;
+  static deserializeBinaryFromReader(message: ExtrinsicParameters, reader: jspb.BinaryReader): ExtrinsicParameters;
+}
+
+export namespace ExtrinsicParameters {
+  export type AsObject = {
+    translation?: common_v1_common_pb.Vector3.AsObject,
+    orientation?: common_v1_common_pb.Orientation.AsObject,
+  }
+}
+

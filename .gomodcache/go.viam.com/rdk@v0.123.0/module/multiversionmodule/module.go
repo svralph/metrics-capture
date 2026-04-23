@@ -1,0 +1,89 @@
+// Package main is a module designed to help build tests for reconfiguration logic between module versions
+package main
+
+import (
+	"context"
+	"fmt"
+
+	"github.com/pkg/errors"
+
+	"go.viam.com/rdk/components/generic"
+	"go.viam.com/rdk/components/motor"
+	"go.viam.com/rdk/logging"
+	"go.viam.com/rdk/module"
+	"go.viam.com/rdk/resource"
+)
+
+var myModel = resource.NewModel("acme", "demo", "multiversionmodule")
+
+// VERSION is set with `-ldflags "-X main.VERSION=..."`.
+var VERSION string
+
+// config is a simple config for a generic component.
+type config struct {
+	// Required to be non-empty for VERSION="v2", not required otherwise
+	Parameter string `json:"parameter"`
+	// Required to be non-empty for VERSION="v3", not required otherwise
+	Motor string `json:"motor"`
+}
+
+type component struct {
+	resource.Named
+	resource.TriviallyCloseable
+	resource.AlwaysRebuild
+
+	logger logging.Logger
+	cfg    *config
+}
+
+// Validate validates the config depending on VERSION.
+func (cfg *config) Validate(_ string) ([]string, []string, error) {
+	switch VERSION {
+	case "v2":
+		if cfg.Parameter == "" {
+			return nil, nil, errors.New("version 2 requires a parameter")
+		}
+	case "v3":
+		if cfg.Motor == "" {
+			return nil, nil, errors.New("version 3 requires a motor")
+		}
+		return []string{cfg.Motor}, nil, nil
+	default:
+	}
+	return make([]string, 0), make([]string, 0), nil
+}
+
+func main() {
+	logging.NewLogger(fmt.Sprintf("MultiVersionModule-%s", VERSION)).Info("starting module")
+	resource.RegisterComponent(generic.API, myModel, resource.Registration[resource.Resource, *config]{
+		Constructor: newComponent,
+	})
+	module.ModularMain(resource.APIModel{generic.API, myModel})
+}
+
+func newComponent(_ context.Context,
+	deps resource.Dependencies,
+	conf resource.Config,
+	logger logging.Logger,
+) (resource.Resource, error) {
+	newConf, err := resource.NativeConfig[*config](conf)
+	if err != nil {
+		return nil, errors.Wrap(err, "create component failed due to config parsing")
+	}
+	if VERSION == "v3" {
+		// Version 3 should have a motor in the deps
+		if _, err := motor.FromProvider(deps, newConf.Motor); err != nil {
+			return nil, errors.Wrapf(err, "failed to resolve motor %q for version 3", newConf.Motor)
+		}
+	}
+	return &component{
+		Named:  conf.ResourceName().AsNamed(),
+		cfg:    newConf,
+		logger: logger,
+	}, nil
+}
+
+// DoCommand does nothing for now.
+func (c *component) DoCommand(ctx context.Context, req map[string]interface{}) (map[string]interface{}, error) {
+	return map[string]interface{}{}, nil
+}

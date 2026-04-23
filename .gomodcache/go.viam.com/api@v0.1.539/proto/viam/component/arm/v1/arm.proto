@@ -1,0 +1,186 @@
+syntax = "proto3";
+
+package viam.component.arm.v1;
+
+import "common/v1/common.proto";
+import "google/api/annotations.proto";
+import "google/protobuf/struct.proto";
+
+option go_package = "go.viam.com/api/component/arm/v1";
+option java_package = "com.viam.component.arm.v1";
+
+// An ArmService services all arms associated with a robot
+service ArmService {
+  // GetEndPosition gets the current position the end of the robot's arm expressed as X,Y,Z,ox,oy,oz,theta
+  rpc GetEndPosition(GetEndPositionRequest) returns (GetEndPositionResponse) {
+    option (google.api.http) = {get: "/viam/api/v1/component/arm/{name}/position"};
+  }
+
+  // MoveToPosition moves the mount point of the robot's end effector to the requested position.
+  // This will block until done or a new operation cancels this one
+  rpc MoveToPosition(MoveToPositionRequest) returns (MoveToPositionResponse) {
+    option (common.v1.safety_heartbeat_monitored) = true;
+    option (google.api.http) = {put: "/viam/api/v1/component/arm/{name}/position"};
+  }
+
+  // GetJointPositions lists the joint positions (in degrees) of every joint on a robot
+  rpc GetJointPositions(GetJointPositionsRequest) returns (GetJointPositionsResponse) {
+    option (google.api.http) = {get: "/viam/api/v1/component/arm/{name}/joint_positions"};
+  }
+
+  // MoveToJointPositions moves every joint on a robot's arm to specified angles which are expressed in degrees
+  // This will block until done or a new operation cancels this one
+  rpc MoveToJointPositions(MoveToJointPositionsRequest) returns (MoveToJointPositionsResponse) {
+    option (common.v1.safety_heartbeat_monitored) = true;
+    option (google.api.http) = {put: "/viam/api/v1/component/arm/{name}/joint_positions"};
+  }
+
+  // MoveThroughJointPositions moves every joint on a robot's arm to the specified JointPositions in the order they are specified,
+  // obeying the specified velocity and acceleration limits.
+  // This will block until done or a new operation cancels this one
+  rpc MoveThroughJointPositions(MoveThroughJointPositionsRequest) returns (MoveThroughJointPositionsResponse) {
+    option (common.v1.safety_heartbeat_monitored) = true;
+    option (google.api.http) = {post: "/viam/api/v1/component/arm/{name}/move_through_joint_positions"};
+  }
+
+  // Stop stops a robot's arm
+  rpc Stop(StopRequest) returns (StopResponse) {
+    option (google.api.http) = {post: "/viam/api/v1/component/arm/{name}/stop"};
+  }
+
+  // IsMoving reports if a component is in motion
+  rpc IsMoving(IsMovingRequest) returns (IsMovingResponse) {
+    option (google.api.http) = {get: "/viam/api/v1/component/arm/{name}/is_moving"};
+  }
+
+  // DoCommand sends/receives arbitrary commands
+  rpc DoCommand(common.v1.DoCommandRequest) returns (common.v1.DoCommandResponse) {
+    option (google.api.http) = {post: "/viam/api/v1/component/arm/{name}/do_command"};
+  }
+
+  // GetStatus returns the status of the resource
+  rpc GetStatus(common.v1.GetStatusRequest) returns (common.v1.GetStatusResponse) {
+    option (google.api.http) = {get: "/viam/api/v1/component/arm/{name}/get_status"};
+  }
+
+  // GetKinematics returns the kinematics file for the component
+  rpc GetKinematics(common.v1.GetKinematicsRequest) returns (common.v1.GetKinematicsResponse) {
+    option (google.api.http) = {get: "/viam/api/v1/component/arm/{name}/kinematics"};
+  }
+
+  // GetGeometries returns the geometries of the component in their current configuration
+  rpc GetGeometries(common.v1.GetGeometriesRequest) returns (common.v1.GetGeometriesResponse) {
+    option (google.api.http) = {get: "/viam/api/v1/component/arm/{name}/geometries"};
+  }
+
+  // Get3DModels returns the 3D models of the component
+  rpc Get3DModels(common.v1.Get3DModelsRequest) returns (common.v1.Get3DModelsResponse) {
+    option (google.api.http) = {get: "/viam/api/v1/component/arm/{name}/3d_models"};
+  }
+}
+
+message GetEndPositionRequest {
+  // Name of an arm
+  string name = 1;
+  // Additional arguments to the method
+  google.protobuf.Struct extra = 99;
+}
+
+message GetEndPositionResponse {
+  // Returns 6d pose of the end effector relative to the base, represented by X,Y,Z coordinates which express
+  // millimeters and theta, ox, oy, oz coordinates which express an orientation vector
+  common.v1.Pose pose = 1;
+}
+
+message JointPositions {
+  // A list of joint positions. Rotations values are in degrees, translational values in mm.
+  // There should be 1 entry in the list per joint DOF, ordered spatially from the base toward the end effector of the arm
+  repeated double values = 1;
+}
+
+message GetJointPositionsRequest {
+  // Name of an arm
+  string name = 1;
+  // Additional arguments to the method
+  google.protobuf.Struct extra = 99;
+}
+
+message GetJointPositionsResponse {
+  //a list JointPositions
+  JointPositions positions = 1;
+}
+
+// Moves an arm to the specified pose that is within the reference frame of the arm.
+// Move request in Motion API has the same behavior except that it performs obstacle avoidance when a world_state
+// message is specified.
+message MoveToPositionRequest {
+  // Name of an arm
+  string name = 1;
+  // The destination to move the arm to; this is from the reference frame of the arm.
+  common.v1.Pose to = 2;
+  // Additional arguments to the method
+  google.protobuf.Struct extra = 99;
+}
+
+message MoveToPositionResponse {}
+
+message MoveToJointPositionsRequest {
+  // Name of an arm
+  string name = 1;
+  // A list of joint positions
+  // There should be 1 entry in the list per joint DOF, ordered spatially from the base toward the end effector
+  JointPositions positions = 2;
+  // Additional arguments to the method
+  google.protobuf.Struct extra = 99;
+}
+
+message MoveToJointPositionsResponse {}
+
+message MoveThroughJointPositionsRequest {
+  // Name of an arm
+  string name = 1;
+  // A list of joint positions which will be moved to in the order they are specified
+  repeated JointPositions positions = 2;
+  // optional specifications to be obeyed during the motion
+  optional MoveOptions options = 3;
+  // Additional arguments to the method
+  google.protobuf.Struct extra = 99;
+}
+
+message MoveThroughJointPositionsResponse {}
+
+message StopRequest {
+  // Name of an arm
+  string name = 1;
+  // Additional arguments to the method
+  google.protobuf.Struct extra = 99;
+}
+
+message StopResponse {}
+
+message Status {
+  common.v1.Pose end_position = 1;
+  JointPositions joint_positions = 2;
+  bool is_moving = 3;
+}
+
+message IsMovingRequest {
+  string name = 1;
+}
+
+message IsMovingResponse {
+  bool is_moving = 1;
+}
+
+message MoveOptions {
+  // Maximum allowable velocity of an arm joint, in degrees per second.
+  // Ignored when max_vel_degs_per_sec_joints is set.
+  optional double max_vel_degs_per_sec = 1;
+  // Maximum allowable acceleration of an arm joint, in degrees per second squared.
+  // ignored when max_acc_degs_per_sec2_joints is set.
+  optional double max_acc_degs_per_sec2 = 2;
+  // Per-joint maximum velocity in degrees per second.
+  repeated double max_vel_degs_per_sec_joints = 3;
+  // Per-joint maximum acceleration in degrees per second squared.
+  repeated double max_acc_degs_per_sec2_joints = 4;
+}

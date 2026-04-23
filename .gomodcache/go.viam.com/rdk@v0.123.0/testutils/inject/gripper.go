@@ -1,0 +1,122 @@
+package inject
+
+import (
+	"context"
+
+	"go.viam.com/rdk/components/gripper"
+	"go.viam.com/rdk/referenceframe"
+	"go.viam.com/rdk/resource"
+	"go.viam.com/rdk/spatialmath"
+)
+
+// Gripper is an injected gripper.
+type Gripper struct {
+	gripper.Gripper
+	name                   resource.Name
+	DoFunc                 func(ctx context.Context, cmd map[string]interface{}) (map[string]interface{}, error)
+	StatusFunc             func(ctx context.Context) (map[string]interface{}, error)
+	OpenFunc               func(ctx context.Context, extra map[string]interface{}) error
+	GrabFunc               func(ctx context.Context, extra map[string]interface{}) (bool, error)
+	StopFunc               func(ctx context.Context, extra map[string]interface{}) error
+	IsHoldingSomethingFunc func(ctx context.Context, extra map[string]interface{}) (gripper.HoldingStatus, error)
+	IsMovingFunc           func(context.Context) (bool, error)
+	CloseFunc              func(ctx context.Context) error
+	GeometriesFunc         func(ctx context.Context) ([]spatialmath.Geometry, error)
+	KinematicsFunc         func(ctx context.Context) (referenceframe.Model, error)
+}
+
+// NewGripper returns a new injected gripper.
+func NewGripper(name string) *Gripper {
+	return &Gripper{name: gripper.Named(name)}
+}
+
+// Name returns the name of the resource.
+func (g *Gripper) Name() resource.Name {
+	return g.name
+}
+
+// Open calls the injected Open or the real version.
+func (g *Gripper) Open(ctx context.Context, extra map[string]interface{}) error {
+	if g.OpenFunc == nil {
+		return g.Gripper.Open(ctx, extra)
+	}
+	return g.OpenFunc(ctx, extra)
+}
+
+// Grab calls the injected Grab or the real version.
+func (g *Gripper) Grab(ctx context.Context, extra map[string]interface{}) (bool, error) {
+	if g.GrabFunc == nil {
+		return g.Gripper.Grab(ctx, extra)
+	}
+	return g.GrabFunc(ctx, extra)
+}
+
+// IsHoldingSomething calls the injected IsHoldingSomething or the real version.
+func (g *Gripper) IsHoldingSomething(ctx context.Context, extra map[string]interface{}) (gripper.HoldingStatus, error) {
+	if g.IsHoldingSomethingFunc == nil {
+		return g.Gripper.IsHoldingSomething(ctx, extra)
+	}
+	return g.IsHoldingSomethingFunc(ctx, extra)
+}
+
+// Stop calls the injected Stop or the real version.
+func (g *Gripper) Stop(ctx context.Context, extra map[string]interface{}) error {
+	if g.StopFunc == nil {
+		return g.Gripper.Stop(ctx, extra)
+	}
+	return g.StopFunc(ctx, extra)
+}
+
+// IsMoving calls the injected IsMoving or the real version.
+func (g *Gripper) IsMoving(ctx context.Context) (bool, error) {
+	if g.IsMovingFunc == nil {
+		return g.Gripper.IsMoving(ctx)
+	}
+	return g.IsMovingFunc(ctx)
+}
+
+// Close calls the injected Close or the real version.
+func (g *Gripper) Close(ctx context.Context) error {
+	if g.CloseFunc == nil {
+		if g.Gripper == nil {
+			return nil
+		}
+		return g.Gripper.Close(ctx)
+	}
+	return g.CloseFunc(ctx)
+}
+
+// DoCommand calls the injected DoCommand or the real version.
+func (g *Gripper) DoCommand(ctx context.Context, cmd map[string]interface{}) (map[string]interface{}, error) {
+	if g.DoFunc == nil {
+		return g.Gripper.DoCommand(ctx, cmd)
+	}
+	return g.DoFunc(ctx, cmd)
+}
+
+// Geometries returns the gripper's geometries.
+func (g *Gripper) Geometries(ctx context.Context, extra map[string]interface{}) ([]spatialmath.Geometry, error) {
+	if g.GeometriesFunc == nil {
+		return g.Gripper.Geometries(ctx, extra)
+	}
+	return g.GeometriesFunc(ctx)
+}
+
+// Kinematics calls the injected Kinematics or the real version.
+func (g *Gripper) Kinematics(ctx context.Context) (referenceframe.Model, error) {
+	if g.KinematicsFunc == nil {
+		return g.Gripper.Kinematics(ctx)
+	}
+	return g.KinematicsFunc(ctx)
+}
+
+// Status calls the injected Status or the real version.
+func (g *Gripper) Status(ctx context.Context) (map[string]interface{}, error) {
+	if g.StatusFunc != nil {
+		return g.StatusFunc(ctx)
+	}
+	if g.Gripper != nil {
+		return g.Gripper.Status(ctx)
+	}
+	return map[string]interface{}{}, nil
+}

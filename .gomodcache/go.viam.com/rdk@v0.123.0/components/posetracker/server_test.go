@@ -1,0 +1,152 @@
+package posetracker_test
+
+import (
+	"context"
+	"errors"
+	"testing"
+
+	commonpb "go.viam.com/api/common/v1"
+	pb "go.viam.com/api/component/posetracker/v1"
+	"go.viam.com/test"
+	"go.viam.com/utils/protoutils"
+
+	"go.viam.com/rdk/components/posetracker"
+	"go.viam.com/rdk/logging"
+	"go.viam.com/rdk/referenceframe"
+	"go.viam.com/rdk/resource"
+	"go.viam.com/rdk/spatialmath"
+	"go.viam.com/rdk/testutils/inject"
+)
+
+var (
+	errPoseFailed      = errors.New("failure to get poses")
+	errGetStatusFailed = errors.New("can't get status")
+)
+
+const (
+	workingPTName = "workingPT"
+	failingPTName = "failingPT"
+	bodyName      = "body1"
+	bodyFrame     = "bodyFrame"
+)
+
+func newServer(logger logging.Logger) (pb.PoseTrackerServiceServer, *inject.PoseTracker, *inject.PoseTracker, error) {
+	injectPT1 := &inject.PoseTracker{}
+	injectPT2 := &inject.PoseTracker{}
+
+	resourceMap := map[resource.Name]posetracker.PoseTracker{
+		posetracker.Named(workingPTName): injectPT1,
+		posetracker.Named(failingPTName): injectPT2,
+	}
+
+	injectSvc, err := resource.NewAPIResourceCollection(posetracker.API, resourceMap)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	return posetracker.NewRPCServiceServer(injectSvc, logger).(pb.PoseTrackerServiceServer), injectPT1, injectPT2, nil
+}
+
+func TestGetPoses(t *testing.T) {
+	ptServer, workingPT, failingPT, err := newServer(logging.NewTestLogger(t))
+	test.That(t, err, test.ShouldBeNil)
+
+	var extraOptions map[string]interface{}
+	workingPT.PosesFunc = func(ctx context.Context, bodyNames []string, extra map[string]interface{}) (
+		referenceframe.FrameSystemPoses, error,
+	) {
+		extraOptions = extra
+		zeroPose := spatialmath.NewZeroPose()
+		return referenceframe.FrameSystemPoses{
+			bodyName: referenceframe.NewPoseInFrame(bodyFrame, zeroPose),
+		}, nil
+	}
+
+	failingPT.PosesFunc = func(ctx context.Context, bodyNames []string, extra map[string]interface{}) (
+		referenceframe.FrameSystemPoses, error,
+	) {
+		return nil, errPoseFailed
+	}
+
+	t.Run("get poses fails on failing pose tracker", func(t *testing.T) {
+		req := pb.GetPosesRequest{
+			Name: failingPTName, BodyNames: []string{bodyName},
+		}
+		resp, err := ptServer.GetPoses(context.Background(), &req)
+		test.That(t, err, test.ShouldBeError, errPoseFailed)
+		test.That(t, resp, test.ShouldBeNil)
+	})
+
+	ext, err := protoutils.StructToStructPb(map[string]interface{}{"foo": "GetPosesRequest"})
+	test.That(t, err, test.ShouldBeNil)
+	req := pb.GetPosesRequest{
+		Name: workingPTName, BodyNames: []string{bodyName}, Extra: ext,
+	}
+	req2 := pb.GetPosesRequest{
+		Name: workingPTName,
+	}
+	resp1, err := ptServer.GetPoses(context.Background(), &req)
+	test.That(t, err, test.ShouldBeNil)
+	test.That(t, extraOptions, test.ShouldResemble, map[string]interface{}{"foo": "GetPosesRequest"})
+	resp2, err := ptServer.GetPoses(context.Background(), &req2)
+	test.That(t, err, test.ShouldBeNil)
+	test.That(t, extraOptions, test.ShouldResemble, map[string]interface{}{})
+
+	workingTestCases := []struct {
+		testStr string
+		resp    *pb.GetPosesResponse
+	}{
+		{
+			testStr: "get poses succeeds with working pose tracker and body names passed",
+			resp:    resp1,
+		},
+		{
+			testStr: "get poses succeeds with working pose tracker but no body names passed",
+			resp:    resp2,
+		},
+	}
+	for _, tc := range workingTestCases {
+		t.Run(tc.testStr, func(t *testing.T) {
+			framedPoses := tc.resp.GetBodyPoses()
+			poseInFrame, ok := framedPoses[bodyName]
+			test.That(t, ok, test.ShouldBeTrue)
+			test.That(t, poseInFrame.GetReferenceFrame(), test.ShouldEqual, bodyFrame)
+			pose := poseInFrame.GetPose()
+			test.That(t, pose.GetX(), test.ShouldEqual, 0)
+			test.That(t, pose.GetY(), test.ShouldEqual, 0)
+			test.That(t, pose.GetZ(), test.ShouldEqual, 0)
+			test.That(t, pose.GetTheta(), test.ShouldEqual, 0)
+			test.That(t, pose.GetOX(), test.ShouldEqual, 0)
+			test.That(t, pose.GetOY(), test.ShouldEqual, 0)
+			test.That(t, pose.GetOZ(), test.ShouldEqual, 1)
+		})
+	}
+}
+
+func TestGetStatus(t *testing.T) {
+	ptServer, workingPT, _, err := newServer(logging.NewTestLogger(t))
+	test.That(t, err, test.ShouldBeNil)
+
+	_, err = ptServer.GetStatus(context.Background(), &commonpb.GetStatusRequest{Name: "missingPT"})
+	test.That(t, err, test.ShouldNotBeNil)
+	test.That(t, err.Error(), test.ShouldContainSubstring, "not found")
+
+	resp, err := ptServer.GetStatus(context.Background(), &commonpb.GetStatusRequest{Name: workingPTName})
+	test.That(t, err, test.ShouldBeNil)
+	test.That(t, resp.Result.AsMap(), test.ShouldBeEmpty)
+
+	expectedStatus := map[string]interface{}{"key": "value", "count": float64(42)}
+	workingPT.StatusFunc = func(ctx context.Context) (map[string]interface{}, error) {
+		return expectedStatus, nil
+	}
+	resp, err = ptServer.GetStatus(context.Background(), &commonpb.GetStatusRequest{Name: workingPTName})
+	test.That(t, err, test.ShouldBeNil)
+	test.That(t, resp.Result.AsMap(), test.ShouldResemble, expectedStatus)
+
+	workingPT.StatusFunc = func(ctx context.Context) (map[string]interface{}, error) {
+		return nil, errGetStatusFailed
+	}
+	_, err = ptServer.GetStatus(context.Background(), &commonpb.GetStatusRequest{Name: workingPTName})
+	test.That(t, err, test.ShouldNotBeNil)
+	test.That(t, err.Error(), test.ShouldContainSubstring, errGetStatusFailed.Error())
+	workingPT.StatusFunc = nil
+}

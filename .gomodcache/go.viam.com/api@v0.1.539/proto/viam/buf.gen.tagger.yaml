@@ -1,0 +1,5 @@
+version: v2
+plugins:
+  - local: protoc-gen-gotag
+    out: .
+    opt: paths=source_relative

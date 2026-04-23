@@ -1,0 +1,219 @@
+package vision_test
+
+import (
+	"context"
+	"image"
+	"net"
+	"testing"
+
+	"go.viam.com/test"
+	"go.viam.com/utils/rpc"
+
+	viamgrpc "go.viam.com/rdk/grpc"
+	"go.viam.com/rdk/logging"
+	"go.viam.com/rdk/resource"
+	_ "go.viam.com/rdk/services/register"
+	"go.viam.com/rdk/services/vision"
+	"go.viam.com/rdk/testutils"
+	"go.viam.com/rdk/testutils/inject"
+	"go.viam.com/rdk/vision/objectdetection"
+	"go.viam.com/rdk/vision/viscapture"
+)
+
+var visName1 = vision.Named("vision1")
+
+func TestClient(t *testing.T) {
+	logger := logging.NewTestLogger(t)
+	listener1, err := net.Listen("tcp", "localhost:0")
+	test.That(t, err, test.ShouldBeNil)
+	rpcServer, err := rpc.NewServer(logger, rpc.WithUnauthenticated())
+	test.That(t, err, test.ShouldBeNil)
+
+	srv := &inject.VisionService{}
+	srv.DetectionsFunc = func(ctx context.Context, img image.Image, extra map[string]interface{}) ([]objectdetection.Detection, error) {
+		det1 := objectdetection.NewDetection(img.Bounds(), image.Rect(5, 10, 15, 20), 0.5, "yes")
+		return []objectdetection.Detection{det1}, nil
+	}
+	srv.DetectionsFromCameraFunc = func(
+		ctx context.Context,
+		camName string,
+		extra map[string]interface{},
+	) ([]objectdetection.Detection, error) {
+		det1 := objectdetection.NewDetection(image.Rect(0, 0, 50, 50), image.Rect(0, 0, 10, 20), 0.8, "camera")
+		return []objectdetection.Detection{det1}, nil
+	}
+	srv.GetPropertiesFunc = func(ctx context.Context, extra map[string]interface{}) (*vision.Properties, error) {
+		return &vision.Properties{ClassificationSupported: false, DetectionSupported: true, ObjectPCDsSupported: false}, nil
+	}
+
+	test.That(t, err, test.ShouldBeNil)
+
+	srv.CaptureAllFromCameraFunc = func(ctx context.Context,
+		cameraName string,
+		opts viscapture.CaptureOptions,
+		extra map[string]interface{},
+	) (viscapture.VisCapture, error) {
+		det1 := objectdetection.NewDetection(image.Rect(0, 0, 50, 50), image.Rect(0, 0, 10, 20), 0.5, "yes")
+		return viscapture.VisCapture{
+			Detections: []objectdetection.Detection{det1},
+			Extra:      extra,
+		}, nil
+	}
+	m := map[resource.Name]vision.Service{
+		vision.Named(testVisionServiceName): srv,
+	}
+	svc, err := resource.NewAPIResourceCollection(vision.API, m)
+	test.That(t, err, test.ShouldBeNil)
+	resourceAPI, ok, err := resource.LookupAPIRegistration[vision.Service](vision.API)
+	test.That(t, err, test.ShouldBeNil)
+	test.That(t, ok, test.ShouldBeTrue)
+	test.That(t, resourceAPI.RegisterRPCService(context.Background(), rpcServer, svc, logger), test.ShouldBeNil)
+
+	go rpcServer.Serve(listener1)
+	defer rpcServer.Stop()
+
+	t.Run("Failing client", func(t *testing.T) {
+		cancelCtx, cancel := context.WithCancel(context.Background())
+		cancel()
+		_, err = viamgrpc.Dial(cancelCtx, listener1.Addr().String(), logger)
+		test.That(t, err, test.ShouldNotBeNil)
+		test.That(t, err.Error(), test.ShouldContainSubstring, "canceled")
+	})
+
+	t.Run("get detections from img", func(t *testing.T) {
+		conn, err := viamgrpc.Dial(context.Background(), listener1.Addr().String(), logger)
+		test.That(t, err, test.ShouldBeNil)
+		client, err := vision.NewClientFromConn(context.Background(), conn, "", vision.Named(testVisionServiceName), logger)
+		test.That(t, err, test.ShouldBeNil)
+
+		dets, err := client.Detections(context.Background(), image.NewRGBA(image.Rect(0, 0, 100, 200)), nil)
+		test.That(t, err, test.ShouldBeNil)
+
+		test.That(t, dets, test.ShouldNotBeNil)
+		test.That(t, dets[0].Label(), test.ShouldResemble, "yes")
+		test.That(t, dets[0].Score(), test.ShouldEqual, 0.5)
+		box := dets[0].BoundingBox()
+		test.That(t, box.Min, test.ShouldResemble, image.Point{5, 10})
+		test.That(t, box.Max, test.ShouldResemble, image.Point{15, 20})
+		test.That(t, dets[0].NormalizedBoundingBox(), test.ShouldResemble, []float64{0.05, 0.05, 0.15, 0.1})
+		test.That(t, client.Close(context.Background()), test.ShouldBeNil)
+		test.That(t, conn.Close(), test.ShouldBeNil)
+	})
+	t.Run("get detections from cam", func(t *testing.T) {
+		conn, err := viamgrpc.Dial(context.Background(), listener1.Addr().String(), logger)
+		test.That(t, err, test.ShouldBeNil)
+		client, err := vision.NewClientFromConn(context.Background(), conn, "", vision.Named(testVisionServiceName), logger)
+		test.That(t, err, test.ShouldBeNil)
+
+		dets, err := client.DetectionsFromCamera(context.Background(), "fake_cam", nil)
+		test.That(t, err, test.ShouldBeNil)
+		test.That(t, dets, test.ShouldHaveLength, 1)
+		test.That(t, dets[0].Label(), test.ShouldEqual, "camera")
+		test.That(t, dets[0].Score(), test.ShouldEqual, 0.8)
+		box := dets[0].BoundingBox()
+		test.That(t, box.Min, test.ShouldResemble, image.Point{0, 0})
+		test.That(t, box.Max, test.ShouldResemble, image.Point{10, 20})
+		test.That(t, dets[0].NormalizedBoundingBox(), test.ShouldResemble, []float64{0.0, 0.0, 0.2, 0.4})
+		test.That(t, client.Close(context.Background()), test.ShouldBeNil)
+		test.That(t, conn.Close(), test.ShouldBeNil)
+	})
+
+	t.Run("get properties", func(t *testing.T) {
+		conn, err := viamgrpc.Dial(context.Background(), listener1.Addr().String(), logger)
+		test.That(t, err, test.ShouldBeNil)
+		client, err := vision.NewClientFromConn(context.Background(), conn, "", vision.Named(testVisionServiceName), logger)
+		test.That(t, err, test.ShouldBeNil)
+
+		props, err := client.GetProperties(context.Background(), nil)
+		test.That(t, err, test.ShouldBeNil)
+
+		test.That(t, props, test.ShouldNotBeNil)
+		test.That(t, props.ClassificationSupported, test.ShouldEqual, false)
+		test.That(t, props.DetectionSupported, test.ShouldEqual, true)
+		test.That(t, props.ObjectPCDsSupported, test.ShouldEqual, false)
+
+		test.That(t, client.Close(context.Background()), test.ShouldBeNil)
+		test.That(t, conn.Close(), test.ShouldBeNil)
+	})
+
+	t.Run("capture all from camera", func(t *testing.T) {
+		conn, err := viamgrpc.Dial(context.Background(), listener1.Addr().String(), logger)
+		test.That(t, err, test.ShouldBeNil)
+		client, err := vision.NewClientFromConn(context.Background(), conn, "", vision.Named(testVisionServiceName), logger)
+		test.That(t, err, test.ShouldBeNil)
+		opts := viscapture.CaptureOptions{
+			true,
+			true,
+			true,
+			true,
+		}
+		extra := map[string]interface{}{"foo": "captureAll"}
+		capt, err := client.CaptureAllFromCamera(context.Background(), "", opts, extra)
+		test.That(t, err, test.ShouldBeNil)
+
+		test.That(t, capt.Detections, test.ShouldHaveLength, 1)
+		test.That(t, capt.Detections[0].Label(), test.ShouldEqual, "yes")
+		test.That(t, capt.Detections[0].Score(), test.ShouldEqual, 0.5)
+		test.That(t, capt.Detections[0].NormalizedBoundingBox(), test.ShouldResemble, []float64{0.0, 0.0, 0.2, 0.4})
+		test.That(t, capt.Extra, test.ShouldResemble, extra)
+		test.That(t, client.Close(context.Background()), test.ShouldBeNil)
+
+		// test with 'nil' extra
+		capt, err = client.CaptureAllFromCamera(context.Background(), "", opts, nil)
+		test.That(t, err, test.ShouldBeNil)
+		test.That(t, capt.Extra, test.ShouldBeNil) // not necessarily true
+		test.That(t, conn.Close(), test.ShouldBeNil)
+	})
+}
+
+func TestInjectedServiceClient(t *testing.T) {
+	logger := logging.NewTestLogger(t)
+	listener1, err := net.Listen("tcp", "localhost:0")
+	test.That(t, err, test.ShouldBeNil)
+	rpcServer, err := rpc.NewServer(logger, rpc.WithUnauthenticated())
+	test.That(t, err, test.ShouldBeNil)
+
+	injectVision := &inject.VisionService{}
+	osMap := map[resource.Name]vision.Service{
+		visName1: injectVision,
+	}
+	svc, err := resource.NewAPIResourceCollection(vision.API, osMap)
+	test.That(t, err, test.ShouldBeNil)
+	resourceAPI, ok, err := resource.LookupAPIRegistration[vision.Service](vision.API)
+	test.That(t, err, test.ShouldBeNil)
+	test.That(t, ok, test.ShouldBeTrue)
+	test.That(t, resourceAPI.RegisterRPCService(context.Background(), rpcServer, svc, logger), test.ShouldBeNil)
+
+	go rpcServer.Serve(listener1)
+	defer rpcServer.Stop()
+
+	t.Run("Do Command", func(t *testing.T) {
+		conn, err := viamgrpc.Dial(context.Background(), listener1.Addr().String(), logger)
+		test.That(t, err, test.ShouldBeNil)
+		workingDialedClient, err := vision.NewClientFromConn(context.Background(), conn, "", vision.Named(testVisionServiceName), logger)
+		test.That(t, err, test.ShouldBeNil)
+		injectVision.DoCommandFunc = testutils.EchoFunc
+		resp, err := workingDialedClient.DoCommand(context.Background(), testutils.TestCommand)
+		test.That(t, err, test.ShouldBeNil)
+		test.That(t, resp["command"], test.ShouldEqual, testutils.TestCommand["command"])
+		test.That(t, resp["data"], test.ShouldEqual, testutils.TestCommand["data"])
+
+		// Status - default empty status
+		statusResult, err := workingDialedClient.Status(context.Background())
+		test.That(t, err, test.ShouldBeNil)
+		test.That(t, statusResult, test.ShouldBeEmpty)
+
+		// Status - custom status
+		expectedStatus := map[string]interface{}{"key": "value", "count": float64(42)}
+		injectVision.StatusFunc = func(ctx context.Context) (map[string]interface{}, error) {
+			return expectedStatus, nil
+		}
+		statusResult, err = workingDialedClient.Status(context.Background())
+		test.That(t, err, test.ShouldBeNil)
+		test.That(t, statusResult, test.ShouldResemble, expectedStatus)
+		injectVision.StatusFunc = nil
+
+		test.That(t, workingDialedClient.Close(context.Background()), test.ShouldBeNil)
+		test.That(t, conn.Close(), test.ShouldBeNil)
+	})
+}

@@ -1,0 +1,87 @@
+{
+    "components": [
+        {
+            "name": "arm1",
+            "type": "arm",
+            "model": "fake",
+            "attributes": {
+                "model-path": "../../components/arm/fake/kinematics/fake.json"
+            }
+        },
+        {
+            "name": "arm2",
+            "type": "arm",
+            "model": "fake",
+            "attributes": {
+                "model-path": "../../components/arm/fake/kinematics/fake.json"
+            }
+        },
+        {
+            "name": "m1",
+            "type": "motor",
+            "model": "fake"
+        },
+        {
+            "name": "m2",
+            "type": "motor",
+            "model": "fake",
+            "attributes": {
+                "board": "board1",
+                "pins": {
+                    "pwm": "5"
+                },
+                "pwm_freq": 4000
+            },
+            "depends_on": [
+                "board1"
+            ]
+        },
+        {
+            "name": "m3",
+            "type": "motor",
+            "model": "fake"
+        },
+        {
+            "name": "m4",
+            "type": "motor",
+            "model": "fake"
+        },
+        {
+            "name": "base1",
+            "type": "base",
+            "model": "fake"
+        },
+        {
+            "name": "base2",
+            "type": "base",
+            "model": "fake"
+        },
+        {
+            "name": "board1",
+            "type": "board",
+            "model": "fake",
+            "attributes": {}
+        }
+    ],
+    "processes": [
+        {
+            "id": "1",
+            "name": "echo",
+            "args": [
+                "hello",
+                "world"
+            ],
+            "one_shot": true
+        },
+        {
+            "id": "2",
+            "name": "echo",
+            "args": [
+                "hello",
+                "world",
+                "again"
+            ],
+            "one_shot": true
+        }
+    ]
+}

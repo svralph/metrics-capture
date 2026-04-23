@@ -1,0 +1,90 @@
+{
+    "components": [
+        {
+            "name": "arm1",
+            "type": "arm",
+            "model": "fake",
+            "depends_on": [
+                "base1"
+            ],
+            "attributes": {
+                "arm-model": ""
+            }
+        },
+        {
+            "name": "arm2",
+            "type": "arm",
+            "model": "fake",
+            "attributes": {
+                "model-path": "../../components/arm/fake/kinematics/fake.json"
+            },
+            "depends_on": [
+                "base2"
+            ]
+        },
+        {
+            "name": "m4",
+            "type": "motor",
+            "model": "fake",
+            "depends_on": [
+                "arm2"
+            ]
+        },
+        {
+            "name": "base1",
+            "type": "base",
+            "model": "fake",
+            "depends_on": [
+                "board1"
+            ]
+        },
+        {
+            "name": "base2",
+            "type": "base",
+            "model": "fake",
+            "depends_on": [
+                "board1"
+            ]
+        },
+        {
+            "name": "board1",
+            "type": "board",
+            "model": "fake",
+            "attributes": {
+                "analogs": [
+                    {
+                        "name": "analog1",
+                        "pin": "0"
+                    }
+                ],
+                "digital_interrupts": [
+                    {
+                        "name": "encoder",
+                        "pin": "14"
+                    }
+                ]
+            }
+        }
+    ],
+    "processes": [
+        {
+            "id": "1",
+            "name": "echo",
+            "args": [
+                "hello",
+                "world"
+            ],
+            "one_shot": true
+        },
+        {
+            "id": "2",
+            "name": "echo",
+            "args": [
+                "hello",
+                "world",
+                "again"
+            ],
+            "one_shot": true
+        }
+    ]
+}

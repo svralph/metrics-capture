@@ -1,0 +1,114 @@
+syntax = "proto3";
+
+package viam.app.packages.v1;
+
+import "google/api/annotations.proto";
+import "google/protobuf/struct.proto";
+import "google/protobuf/timestamp.proto";
+
+option go_package = "go.viam.com/api/app/packages/v1";
+
+service PackageService {
+  // CreatePackage uploads a package to the cloud
+  rpc CreatePackage(stream CreatePackageRequest) returns (CreatePackageResponse) {
+    option (google.api.http) = {post: "/packages/v1/create"};
+  }
+
+  // DeletePackage removes the given package versions
+  rpc DeletePackage(DeletePackageRequest) returns (DeletePackageResponse) {
+    option (google.api.http) = {delete: "/packages/v1/delete"};
+  }
+
+  // GetPackage returns the metadata for a requested package version. It also returns a URL
+  // for downloading the package if one is requested.
+  rpc GetPackage(GetPackageRequest) returns (GetPackageResponse) {
+    option (google.api.http) = {get: "/packages/v1/get"};
+  }
+
+  // ListPackages gets the metadata for the requested packages. Includes package name, version, and/or
+  // type to filter beyond the required organization_id. ListPackages also returns URLs for
+  // downloading each package if they are requested.
+  rpc ListPackages(ListPackagesRequest) returns (ListPackagesResponse) {
+    option (google.api.http) = {get: "/packages/v1/list"};
+  }
+}
+
+enum PackageType {
+  PACKAGE_TYPE_UNSPECIFIED = 0;
+  PACKAGE_TYPE_ARCHIVE = 1;
+  PACKAGE_TYPE_ML_MODEL = 2;
+  PACKAGE_TYPE_MODULE = 3;
+  PACKAGE_TYPE_SLAM_MAP = 4;
+  PACKAGE_TYPE_ML_TRAINING = 5;
+}
+
+message FileInfo {
+  string name = 1;
+  uint64 size = 2;
+  optional bool is_directory = 3;
+}
+
+message PackageInfo {
+  string organization_id = 1;
+  string name = 2;
+  string version = 3;
+  PackageType type = 4;
+  optional string platform = 7;
+  repeated FileInfo files = 5;
+  google.protobuf.Struct metadata = 6;
+}
+
+message CreatePackageRequest {
+  oneof package {
+    PackageInfo info = 1;
+    // .tar.gz file
+    bytes contents = 2;
+  }
+}
+
+// Returns the package ID and version which are populated in GetPackageRequest and DeletePackageRequest to
+// retrieve or delete this package.
+message CreatePackageResponse {
+  string id = 1;
+  string version = 2;
+}
+
+message DeletePackageRequest {
+  string id = 1;
+  string version = 2;
+  PackageType type = 3;
+}
+
+message DeletePackageResponse {}
+
+message Package {
+  PackageInfo info = 1;
+  string url = 2;
+  google.protobuf.Timestamp created_on = 3;
+  string checksum = 4;
+  string id = 5;
+}
+
+message GetPackageRequest {
+  string id = 1;
+  string version = 2;
+  optional bool include_url = 3;
+  optional PackageType type = 4;
+  optional string platform = 5;
+}
+
+message GetPackageResponse {
+  Package package = 1;
+}
+
+message ListPackagesRequest {
+  string organization_id = 1;
+  optional string name = 2;
+  optional string version = 3;
+  optional PackageType type = 4;
+  optional bool include_url = 5;
+}
+
+message ListPackagesResponse {
+  repeated Package packages = 1;
+}

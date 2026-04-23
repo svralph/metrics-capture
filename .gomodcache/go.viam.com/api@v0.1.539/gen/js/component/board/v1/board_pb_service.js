@@ -1,0 +1,590 @@
+// package: viam.component.board.v1
+// file: component/board/v1/board.proto
+
+var component_board_v1_board_pb = require("../../../component/board/v1/board_pb");
+var common_v1_common_pb = require("../../../common/v1/common_pb");
+var grpc = require("@improbable-eng/grpc-web").grpc;
+
+var BoardService = (function () {
+  function BoardService() {}
+  BoardService.serviceName = "viam.component.board.v1.BoardService";
+  return BoardService;
+}());
+
+BoardService.SetGPIO = {
+  methodName: "SetGPIO",
+  service: BoardService,
+  requestStream: false,
+  responseStream: false,
+  requestType: component_board_v1_board_pb.SetGPIORequest,
+  responseType: component_board_v1_board_pb.SetGPIOResponse
+};
+
+BoardService.GetGPIO = {
+  methodName: "GetGPIO",
+  service: BoardService,
+  requestStream: false,
+  responseStream: false,
+  requestType: component_board_v1_board_pb.GetGPIORequest,
+  responseType: component_board_v1_board_pb.GetGPIOResponse
+};
+
+BoardService.PWM = {
+  methodName: "PWM",
+  service: BoardService,
+  requestStream: false,
+  responseStream: false,
+  requestType: component_board_v1_board_pb.PWMRequest,
+  responseType: component_board_v1_board_pb.PWMResponse
+};
+
+BoardService.SetPWM = {
+  methodName: "SetPWM",
+  service: BoardService,
+  requestStream: false,
+  responseStream: false,
+  requestType: component_board_v1_board_pb.SetPWMRequest,
+  responseType: component_board_v1_board_pb.SetPWMResponse
+};
+
+BoardService.PWMFrequency = {
+  methodName: "PWMFrequency",
+  service: BoardService,
+  requestStream: false,
+  responseStream: false,
+  requestType: component_board_v1_board_pb.PWMFrequencyRequest,
+  responseType: component_board_v1_board_pb.PWMFrequencyResponse
+};
+
+BoardService.SetPWMFrequency = {
+  methodName: "SetPWMFrequency",
+  service: BoardService,
+  requestStream: false,
+  responseStream: false,
+  requestType: component_board_v1_board_pb.SetPWMFrequencyRequest,
+  responseType: component_board_v1_board_pb.SetPWMFrequencyResponse
+};
+
+BoardService.DoCommand = {
+  methodName: "DoCommand",
+  service: BoardService,
+  requestStream: false,
+  responseStream: false,
+  requestType: common_v1_common_pb.DoCommandRequest,
+  responseType: common_v1_common_pb.DoCommandResponse
+};
+
+BoardService.GetStatus = {
+  methodName: "GetStatus",
+  service: BoardService,
+  requestStream: false,
+  responseStream: false,
+  requestType: common_v1_common_pb.GetStatusRequest,
+  responseType: common_v1_common_pb.GetStatusResponse
+};
+
+BoardService.ReadAnalogReader = {
+  methodName: "ReadAnalogReader",
+  service: BoardService,
+  requestStream: false,
+  responseStream: false,
+  requestType: component_board_v1_board_pb.ReadAnalogReaderRequest,
+  responseType: component_board_v1_board_pb.ReadAnalogReaderResponse
+};
+
+BoardService.WriteAnalog = {
+  methodName: "WriteAnalog",
+  service: BoardService,
+  requestStream: false,
+  responseStream: false,
+  requestType: component_board_v1_board_pb.WriteAnalogRequest,
+  responseType: component_board_v1_board_pb.WriteAnalogResponse
+};
+
+BoardService.GetDigitalInterruptValue = {
+  methodName: "GetDigitalInterruptValue",
+  service: BoardService,
+  requestStream: false,
+  responseStream: false,
+  requestType: component_board_v1_board_pb.GetDigitalInterruptValueRequest,
+  responseType: component_board_v1_board_pb.GetDigitalInterruptValueResponse
+};
+
+BoardService.StreamTicks = {
+  methodName: "StreamTicks",
+  service: BoardService,
+  requestStream: false,
+  responseStream: true,
+  requestType: component_board_v1_board_pb.StreamTicksRequest,
+  responseType: component_board_v1_board_pb.StreamTicksResponse
+};
+
+BoardService.SetPowerMode = {
+  methodName: "SetPowerMode",
+  service: BoardService,
+  requestStream: false,
+  responseStream: false,
+  requestType: component_board_v1_board_pb.SetPowerModeRequest,
+  responseType: component_board_v1_board_pb.SetPowerModeResponse
+};
+
+BoardService.GetGeometries = {
+  methodName: "GetGeometries",
+  service: BoardService,
+  requestStream: false,
+  responseStream: false,
+  requestType: common_v1_common_pb.GetGeometriesRequest,
+  responseType: common_v1_common_pb.GetGeometriesResponse
+};
+
+exports.BoardService = BoardService;
+
+function BoardServiceClient(serviceHost, options) {
+  this.serviceHost = serviceHost;
+  this.options = options || {};
+}
+
+BoardServiceClient.prototype.setGPIO = function setGPIO(requestMessage, metadata, callback) {
+  if (arguments.length === 2) {
+    callback = arguments[1];
+  }
+  var client = grpc.unary(BoardService.SetGPIO, {
+    request: requestMessage,
+    host: this.serviceHost,
+    metadata: metadata,
+    transport: this.options.transport,
+    debug: this.options.debug,
+    onEnd: function (response) {
+      if (callback) {
+        if (response.status !== grpc.Code.OK) {
+          var err = new Error(response.statusMessage);
+          err.code = response.status;
+          err.metadata = response.trailers;
+          callback(err, null);
+        } else {
+          callback(null, response.message);
+        }
+      }
+    }
+  });
+  return {
+    cancel: function () {
+      callback = null;
+      client.close();
+    }
+  };
+};
+
+BoardServiceClient.prototype.getGPIO = function getGPIO(requestMessage, metadata, callback) {
+  if (arguments.length === 2) {
+    callback = arguments[1];
+  }
+  var client = grpc.unary(BoardService.GetGPIO, {
+    request: requestMessage,
+    host: this.serviceHost,
+    metadata: metadata,
+    transport: this.options.transport,
+    debug: this.options.debug,
+    onEnd: function (response) {
+      if (callback) {
+        if (response.status !== grpc.Code.OK) {
+          var err = new Error(response.statusMessage);
+          err.code = response.status;
+          err.metadata = response.trailers;
+          callback(err, null);
+        } else {
+          callback(null, response.message);
+        }
+      }
+    }
+  });
+  return {
+    cancel: function () {
+      callback = null;
+      client.close();
+    }
+  };
+};
+
+BoardServiceClient.prototype.pWM = function pWM(requestMessage, metadata, callback) {
+  if (arguments.length === 2) {
+    callback = arguments[1];
+  }
+  var client = grpc.unary(BoardService.PWM, {
+    request: requestMessage,
+    host: this.serviceHost,
+    metadata: metadata,
+    transport: this.options.transport,
+    debug: this.options.debug,
+    onEnd: function (response) {
+      if (callback) {
+        if (response.status !== grpc.Code.OK) {
+          var err = new Error(response.statusMessage);
+          err.code = response.status;
+          err.metadata = response.trailers;
+          callback(err, null);
+        } else {
+          callback(null, response.message);
+        }
+      }
+    }
+  });
+  return {
+    cancel: function () {
+      callback = null;
+      client.close();
+    }
+  };
+};
+
+BoardServiceClient.prototype.setPWM = function setPWM(requestMessage, metadata, callback) {
+  if (arguments.length === 2) {
+    callback = arguments[1];
+  }
+  var client = grpc.unary(BoardService.SetPWM, {
+    request: requestMessage,
+    host: this.serviceHost,
+    metadata: metadata,
+    transport: this.options.transport,
+    debug: this.options.debug,
+    onEnd: function (response) {
+      if (callback) {
+        if (response.status !== grpc.Code.OK) {
+          var err = new Error(response.statusMessage);
+          err.code = response.status;
+          err.metadata = response.trailers;
+          callback(err, null);
+        } else {
+          callback(null, response.message);
+        }
+      }
+    }
+  });
+  return {
+    cancel: function () {
+      callback = null;
+      client.close();
+    }
+  };
+};
+
+BoardServiceClient.prototype.pWMFrequency = function pWMFrequency(requestMessage, metadata, callback) {
+  if (arguments.length === 2) {
+    callback = arguments[1];
+  }
+  var client = grpc.unary(BoardService.PWMFrequency, {
+    request: requestMessage,
+    host: this.serviceHost,
+    metadata: metadata,
+    transport: this.options.transport,
+    debug: this.options.debug,
+    onEnd: function (response) {
+      if (callback) {
+        if (response.status !== grpc.Code.OK) {
+          var err = new Error(response.statusMessage);
+          err.code = response.status;
+          err.metadata = response.trailers;
+          callback(err, null);
+        } else {
+          callback(null, response.message);
+        }
+      }
+    }
+  });
+  return {
+    cancel: function () {
+      callback = null;
+      client.close();
+    }
+  };
+};
+
+BoardServiceClient.prototype.setPWMFrequency = function setPWMFrequency(requestMessage, metadata, callback) {
+  if (arguments.length === 2) {
+    callback = arguments[1];
+  }
+  var client = grpc.unary(BoardService.SetPWMFrequency, {
+    request: requestMessage,
+    host: this.serviceHost,
+    metadata: metadata,
+    transport: this.options.transport,
+    debug: this.options.debug,
+    onEnd: function (response) {
+      if (callback) {
+        if (response.status !== grpc.Code.OK) {
+          var err = new Error(response.statusMessage);
+          err.code = response.status;
+          err.metadata = response.trailers;
+          callback(err, null);
+        } else {
+          callback(null, response.message);
+        }
+      }
+    }
+  });
+  return {
+    cancel: function () {
+      callback = null;
+      client.close();
+    }
+  };
+};
+
+BoardServiceClient.prototype.doCommand = function doCommand(requestMessage, metadata, callback) {
+  if (arguments.length === 2) {
+    callback = arguments[1];
+  }
+  var client = grpc.unary(BoardService.DoCommand, {
+    request: requestMessage,
+    host: this.serviceHost,
+    metadata: metadata,
+    transport: this.options.transport,
+    debug: this.options.debug,
+    onEnd: function (response) {
+      if (callback) {
+        if (response.status !== grpc.Code.OK) {
+          var err = new Error(response.statusMessage);
+          err.code = response.status;
+          err.metadata = response.trailers;
+          callback(err, null);
+        } else {
+          callback(null, response.message);
+        }
+      }
+    }
+  });
+  return {
+    cancel: function () {
+      callback = null;
+      client.close();
+    }
+  };
+};
+
+BoardServiceClient.prototype.getStatus = function getStatus(requestMessage, metadata, callback) {
+  if (arguments.length === 2) {
+    callback = arguments[1];
+  }
+  var client = grpc.unary(BoardService.GetStatus, {
+    request: requestMessage,
+    host: this.serviceHost,
+    metadata: metadata,
+    transport: this.options.transport,
+    debug: this.options.debug,
+    onEnd: function (response) {
+      if (callback) {
+        if (response.status !== grpc.Code.OK) {
+          var err = new Error(response.statusMessage);
+          err.code = response.status;
+          err.metadata = response.trailers;
+          callback(err, null);
+        } else {
+          callback(null, response.message);
+        }
+      }
+    }
+  });
+  return {
+    cancel: function () {
+      callback = null;
+      client.close();
+    }
+  };
+};
+
+BoardServiceClient.prototype.readAnalogReader = function readAnalogReader(requestMessage, metadata, callback) {
+  if (arguments.length === 2) {
+    callback = arguments[1];
+  }
+  var client = grpc.unary(BoardService.ReadAnalogReader, {
+    request: requestMessage,
+    host: this.serviceHost,
+    metadata: metadata,
+    transport: this.options.transport,
+    debug: this.options.debug,
+    onEnd: function (response) {
+      if (callback) {
+        if (response.status !== grpc.Code.OK) {
+          var err = new Error(response.statusMessage);
+          err.code = response.status;
+          err.metadata = response.trailers;
+          callback(err, null);
+        } else {
+          callback(null, response.message);
+        }
+      }
+    }
+  });
+  return {
+    cancel: function () {
+      callback = null;
+      client.close();
+    }
+  };
+};
+
+BoardServiceClient.prototype.writeAnalog = function writeAnalog(requestMessage, metadata, callback) {
+  if (arguments.length === 2) {
+    callback = arguments[1];
+  }
+  var client = grpc.unary(BoardService.WriteAnalog, {
+    request: requestMessage,
+    host: this.serviceHost,
+    metadata: metadata,
+    transport: this.options.transport,
+    debug: this.options.debug,
+    onEnd: function (response) {
+      if (callback) {
+        if (response.status !== grpc.Code.OK) {
+          var err = new Error(response.statusMessage);
+          err.code = response.status;
+          err.metadata = response.trailers;
+          callback(err, null);
+        } else {
+          callback(null, response.message);
+        }
+      }
+    }
+  });
+  return {
+    cancel: function () {
+      callback = null;
+      client.close();
+    }
+  };
+};
+
+BoardServiceClient.prototype.getDigitalInterruptValue = function getDigitalInterruptValue(requestMessage, metadata, callback) {
+  if (arguments.length === 2) {
+    callback = arguments[1];
+  }
+  var client = grpc.unary(BoardService.GetDigitalInterruptValue, {
+    request: requestMessage,
+    host: this.serviceHost,
+    metadata: metadata,
+    transport: this.options.transport,
+    debug: this.options.debug,
+    onEnd: function (response) {
+      if (callback) {
+        if (response.status !== grpc.Code.OK) {
+          var err = new Error(response.statusMessage);
+          err.code = response.status;
+          err.metadata = response.trailers;
+          callback(err, null);
+        } else {
+          callback(null, response.message);
+        }
+      }
+    }
+  });
+  return {
+    cancel: function () {
+      callback = null;
+      client.close();
+    }
+  };
+};
+
+BoardServiceClient.prototype.streamTicks = function streamTicks(requestMessage, metadata) {
+  var listeners = {
+    data: [],
+    end: [],
+    status: []
+  };
+  var client = grpc.invoke(BoardService.StreamTicks, {
+    request: requestMessage,
+    host: this.serviceHost,
+    metadata: metadata,
+    transport: this.options.transport,
+    debug: this.options.debug,
+    onMessage: function (responseMessage) {
+      listeners.data.forEach(function (handler) {
+        handler(responseMessage);
+      });
+    },
+    onEnd: function (status, statusMessage, trailers) {
+      listeners.status.forEach(function (handler) {
+        handler({ code: status, details: statusMessage, metadata: trailers });
+      });
+      listeners.end.forEach(function (handler) {
+        handler({ code: status, details: statusMessage, metadata: trailers });
+      });
+      listeners = null;
+    }
+  });
+  return {
+    on: function (type, handler) {
+      listeners[type].push(handler);
+      return this;
+    },
+    cancel: function () {
+      listeners = null;
+      client.close();
+    }
+  };
+};
+
+BoardServiceClient.prototype.setPowerMode = function setPowerMode(requestMessage, metadata, callback) {
+  if (arguments.length === 2) {
+    callback = arguments[1];
+  }
+  var client = grpc.unary(BoardService.SetPowerMode, {
+    request: requestMessage,
+    host: this.serviceHost,
+    metadata: metadata,
+    transport: this.options.transport,
+    debug: this.options.debug,
+    onEnd: function (response) {
+      if (callback) {
+        if (response.status !== grpc.Code.OK) {
+          var err = new Error(response.statusMessage);
+          err.code = response.status;
+          err.metadata = response.trailers;
+          callback(err, null);
+        } else {
+          callback(null, response.message);
+        }
+      }
+    }
+  });
+  return {
+    cancel: function () {
+      callback = null;
+      client.close();
+    }
+  };
+};
+
+BoardServiceClient.prototype.getGeometries = function getGeometries(requestMessage, metadata, callback) {
+  if (arguments.length === 2) {
+    callback = arguments[1];
+  }
+  var client = grpc.unary(BoardService.GetGeometries, {
+    request: requestMessage,
+    host: this.serviceHost,
+    metadata: metadata,
+    transport: this.options.transport,
+    debug: this.options.debug,
+    onEnd: function (response) {
+      if (callback) {
+        if (response.status !== grpc.Code.OK) {
+          var err = new Error(response.statusMessage);
+          err.code = response.status;
+          err.metadata = response.trailers;
+          callback(err, null);
+        } else {
+          callback(null, response.message);
+        }
+      }
+    }
+  });
+  return {
+    cancel: function () {
+      callback = null;
+      client.close();
+    }
+  };
+};
+
+exports.BoardServiceClient = BoardServiceClient;
+

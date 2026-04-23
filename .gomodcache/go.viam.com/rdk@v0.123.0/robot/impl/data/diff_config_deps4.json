@@ -1,0 +1,47 @@
+{
+    "components": [
+        {
+            "name": "board2",
+            "type": "board",
+            "model": "fake",
+            "attributes": {}
+        },
+        {
+            "name": "board1",
+            "type": "board",
+            "model": "fake",
+            "attributes": {}
+        },
+        {
+            "name": "mock6",
+            "type": "mock",
+            "model": "${TEST_MODEL_NAME_2-fake2}",
+            "depends_on": [
+                "mock1",
+                "mock3"
+            ],
+            "attributes": {}
+        }
+    ],
+    "processes": [
+        {
+            "id": "1",
+            "name": "echo",
+            "args": [
+                "hello",
+                "world"
+            ],
+            "one_shot": true
+        },
+        {
+            "id": "2",
+            "name": "echo",
+            "args": [
+                "hello",
+                "world",
+                "again"
+            ],
+            "one_shot": true
+        }
+    ]
+}

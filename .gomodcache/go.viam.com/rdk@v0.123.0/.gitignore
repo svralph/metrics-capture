@@ -1,0 +1,102 @@
+# Binaries for programs and plugins
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+*.dSYM
+*.o
+*.d
+*.mtb
+*.a
+*.dpp
+main
+
+# Test binary, built with `go test -c`
+*.test
+
+# Perf output
+*.pprog
+
+# output for pprof
+*.prof
+*.pprof
+
+# Output of the go coverage tool, specifically when used with LiteIDE
+*.out
+
+# Dependency directories (remove the comment below to include it)
+vendor/
+
+# gRPC/Protocol Buffers
+bin
+dist/*
+node_modules/
+docs/
+
+# Test data
+json.log
+json2.log
+coverage.txt
+coverage2.txt
+coverage.xml
+profile*.pdf
+code-coverage-results.md
+metadata
+data.ndjson
+
+*~
+*#
+*.#*
+*.DS_Store
+*.swp
+
+# act
+.secrets
+
+out/
+.idea/*
+bin/
+
+# artifact
+.artifact/cache
+.artifact/data
+
+# pycache
+*.pyc
+
+# code editor settings
+.vscode/*
+
+# exclude files from `ag` search
+.ignore
+
+# license finder
+lf_logs/
+
+# exclude credential created during CI
+google-credentials.json
+gha-creds-*.json
+
+# frontend built artifacts are not committed (they are generated during appimage github workflow step)
+web/runtime-shared/static
+
+etc/android-ndk-*
+etc/FFmpeg
+
+# qemu core dumps
+web/cmd/server/*.core
+
+# gomobile / android
+*.aar
+*.jar
+
+# direnv (optional dev tool)
+.envrc
+
+# codegpt
+.codegpt/*
+
+# Claude Code
+.claude/worktrees
+.claude/settings.local.json

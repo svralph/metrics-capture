@@ -1,0 +1,37 @@
+version: 2
+registries:
+  github-octocat:
+    type: git
+    url: https://github.com
+    username: x-access-token
+    password: ${{ secrets.DEP_GITHUB_TOKEN }}
+updates:
+  - package-ecosystem: "gomod"
+    directory: "/"
+    registries:
+      - github-octocat
+    schedule:
+      interval: "daily"
+    allow:
+      - dependency-type: "all"
+    ignore:
+      - dependency-name: "github.com/blend/go-sdk" # indirect and missing version
+      - dependency-name: "*"
+        update-types: ["version-update:semver-major", "version-update:semver-minor", "version-update:semver-patch"]
+    assignees:
+      - joncha1
+      - 10zingpd
+      - IanWhalen
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "daily"
+    allow:
+      - dependency-type: "all"
+    ignore:
+      - dependency-name: "*"
+        update-types: ["version-update:semver-major", "version-update:semver-minor", "version-update:semver-patch"]
+    assignees:
+      - joncha1
+      - 10zingpd
+      - IanWhalen

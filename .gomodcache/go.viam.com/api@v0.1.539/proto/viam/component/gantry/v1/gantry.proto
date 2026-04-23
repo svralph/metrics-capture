@@ -1,0 +1,129 @@
+syntax = "proto3";
+
+package viam.component.gantry.v1;
+
+import "common/v1/common.proto";
+import "google/api/annotations.proto";
+import "google/protobuf/struct.proto";
+
+option go_package = "go.viam.com/api/component/gantry/v1";
+option java_package = "com.viam.component.gantry.v1";
+
+// An GantryService services all gantries associated with a robot
+service GantryService {
+  // GetPosition gets the current position of a gantry of the underlying robot.
+  rpc GetPosition(GetPositionRequest) returns (GetPositionResponse) {
+    option (google.api.http) = {get: "/viam/api/v1/component/gantry/{name}/position"};
+  }
+
+  // MoveToPosition moves a gantry of the underlying robot to the requested position.
+  rpc MoveToPosition(MoveToPositionRequest) returns (MoveToPositionResponse) {
+    option (common.v1.safety_heartbeat_monitored) = true;
+    option (google.api.http) = {put: "/viam/api/v1/component/gantry/{name}/position"};
+  }
+
+  // Home runs the homing sequence of a gantry and returns true once it's completed.
+  rpc Home(HomeRequest) returns (HomeResponse) {
+    option (google.api.http) = {put: "/viam/api/v1/component/gantry/{name}/home"};
+  }
+
+  // GetLengths gets the lengths of a gantry of the underlying robot.
+  rpc GetLengths(GetLengthsRequest) returns (GetLengthsResponse) {
+    option (google.api.http) = {get: "/viam/api/v1/component/gantry/{name}/lengths"};
+  }
+
+  // Stop stops a robot's gantry
+  rpc Stop(StopRequest) returns (StopResponse) {
+    option (google.api.http) = {post: "/viam/api/v1/component/gantry/{name}/stop"};
+  }
+
+  // IsMoving reports if a component is in motion
+  rpc IsMoving(IsMovingRequest) returns (IsMovingResponse) {
+    option (google.api.http) = {get: "/viam/api/v1/component/gantry/{name}/is_moving"};
+  }
+
+  // DoCommand sends/receives arbitrary commands
+  rpc DoCommand(common.v1.DoCommandRequest) returns (common.v1.DoCommandResponse) {
+    option (google.api.http) = {post: "/viam/api/v1/component/gantry/{name}/do_command"};
+  }
+
+  // GetStatus returns the status of the resource
+  rpc GetStatus(common.v1.GetStatusRequest) returns (common.v1.GetStatusResponse) {
+    option (google.api.http) = {get: "/viam/api/v1/component/gantry/{name}/get_status"};
+  }
+
+  rpc GetKinematics(common.v1.GetKinematicsRequest) returns (common.v1.GetKinematicsResponse) {
+    option (google.api.http) = {get: "/viam/api/v1/component/gantry/{name}/kinematics"};
+  }
+
+  // GetGeometries returns the geometries of the component in their current configuration
+  rpc GetGeometries(common.v1.GetGeometriesRequest) returns (common.v1.GetGeometriesResponse) {
+    option (google.api.http) = {get: "/viam/api/v1/component/gantry/{name}/geometries"};
+  }
+}
+
+message GetPositionRequest {
+  string name = 1;
+  // Additional arguments to the method
+  google.protobuf.Struct extra = 99;
+}
+
+message GetPositionResponse {
+  repeated double positions_mm = 1;
+}
+
+message MoveToPositionRequest {
+  string name = 1;
+  // Number of millimeters to move the gantry by respective to each axis.
+  repeated double positions_mm = 2;
+  // Speeds to move each gantry axis must match length and order of positions_mm.
+  repeated double speeds_mm_per_sec = 3;
+  // Additional arguments to the method
+  google.protobuf.Struct extra = 99;
+}
+
+message MoveToPositionResponse {}
+
+message HomeRequest {
+  string name = 1;
+  // Additional arguments to the method
+  google.protobuf.Struct extra = 99;
+}
+
+message HomeResponse {
+  // A bool describing whether the gantry has completed homing
+  bool homed = 1;
+}
+
+message GetLengthsRequest {
+  string name = 1;
+  // Additional arguments to the method
+  google.protobuf.Struct extra = 99;
+}
+
+message GetLengthsResponse {
+  repeated double lengths_mm = 1;
+}
+
+message StopRequest {
+  // Name of a gantry
+  string name = 1;
+  // Additional arguments to the method
+  google.protobuf.Struct extra = 99;
+}
+
+message StopResponse {}
+
+message Status {
+  repeated double positions_mm = 1;
+  repeated double lengths_mm = 2;
+  bool is_moving = 3;
+}
+
+message IsMovingRequest {
+  string name = 1;
+}
+
+message IsMovingResponse {
+  bool is_moving = 1;
+}

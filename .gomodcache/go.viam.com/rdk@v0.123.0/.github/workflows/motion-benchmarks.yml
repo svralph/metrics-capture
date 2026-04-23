@@ -1,0 +1,73 @@
+name: Motion Benchmarks
+
+on:
+  workflow_dispatch:
+  workflow_call:
+    inputs:
+      pr_number:
+        type: string
+
+jobs:
+  motion_benchmarks:
+    name:  Motion Benchmarks
+    runs-on: ubuntu-large
+    container: ghcr.io/viamrobotics/rdk-devenv:amd64-cache
+    timeout-minutes: 30
+    env:
+      BASELINE: ${{ github.event.pull_request.base.label }}
+      MODIFIED: ${{ github.event.pull_request.head.label }}
+    steps:
+    - name: Check out main branch code
+      if: github.event_name != 'pull_request_target'
+      uses: actions/checkout@v4
+
+    - name: Check out PR branch code
+      if: github.event_name == 'pull_request_target'
+      uses: actions/checkout@v4
+      with:
+        ref: ${{ github.event.pull_request.head.sha }}
+
+    - name: Check out code in motion-testing repository
+      uses: actions/checkout@v4
+      with:
+        repository: viamrobotics/motion-testing
+        path: motion-testing
+
+    - name: Change ownership to testbot
+      run: chown -R testbot:testbot .
+
+    - name: Run motion quality tests on main branch
+      shell: bash
+      env:
+        URL: ${{ github.event.pull_request.base.repo.html_url }}
+        SHA: ${{ github.event.pull_request.base.sha }}
+      run: |
+        cd motion-testing
+        go mod edit -replace go.viam.com/rdk=${URL#"https://"}@$SHA
+        sudo -Hu testbot bash -lc "go mod tidy && go test ./... -run TestDefault --name=$BASELINE"
+
+    - name: Run motion quality tests on PR branch
+      shell: bash
+      env:
+        URL: ${{ github.event.pull_request.head.repo.html_url }}
+        SHA: ${{ github.event.pull_request.head.sha }}
+      run: |
+        cd motion-testing
+        go mod edit -replace go.viam.com/rdk=${URL#"https://"}@$SHA
+        sudo -Hu testbot bash -lc "go mod tidy && go test ./... -run TestDefault --name=$MODIFIED"
+
+    - name: Print results
+      run: |
+        cd motion-testing
+        sudo -Hu testbot bash -lc "go test ./... -v -run TestScores --baselineDir=$BASELINE --modifiedDir=$MODIFIED"
+        cat results/motion-benchmarks.md
+
+    - name: Add Motion Benchmarks Comment
+      uses: marocchino/sticky-pull-request-comment@v2
+      if: ${{ inputs.pr_number }}
+      with:
+        header: motion-benchmark
+        number: ${{ inputs.pr_number }}
+        recreate: true
+        path: motion-testing/results/motion-benchmarks.md
+

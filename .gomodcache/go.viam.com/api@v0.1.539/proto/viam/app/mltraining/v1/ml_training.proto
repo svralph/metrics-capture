@@ -1,0 +1,186 @@
+syntax = "proto3";
+
+package viam.app.mltraining.v1;
+
+import "google/protobuf/timestamp.proto";
+import "google/rpc/status.proto";
+import "tagger/v1/tagger.proto";
+
+option go_package = "go.viam.com/api/app/mltraining/v1";
+
+service MLTrainingService {
+  // SubmitTrainingJob submits a training job request.
+  rpc SubmitTrainingJob(SubmitTrainingJobRequest) returns (SubmitTrainingJobResponse);
+
+  // SubmitCustomTrainingJob submits a custom training job request.
+  rpc SubmitCustomTrainingJob(SubmitCustomTrainingJobRequest) returns (SubmitCustomTrainingJobResponse);
+
+  // GetTrainingJob retrieves a training job by its ID.
+  rpc GetTrainingJob(GetTrainingJobRequest) returns (GetTrainingJobResponse);
+
+  // ListTrainingJobs lists training jobs for a given organization ID and training status.
+  rpc ListTrainingJobs(ListTrainingJobsRequest) returns (ListTrainingJobsResponse);
+
+  // CancelTrainingJob cancels a training job that has not yet completed.
+  rpc CancelTrainingJob(CancelTrainingJobRequest) returns (CancelTrainingJobResponse);
+
+  // DeleteCompletedTrainingJob removes a completed training job from the database, whether the job succeeded or failed.
+  rpc DeleteCompletedTrainingJob(DeleteCompletedTrainingJobRequest) returns (DeleteCompletedTrainingJobResponse);
+
+  // GetTrainingJobLogs gets the logs for a given custom training job.
+  rpc GetTrainingJobLogs(GetTrainingJobLogsRequest) returns (GetTrainingJobLogsResponse);
+
+  // ListSupportedContainers gets all the containers one can use for a custom training job.
+  rpc ListSupportedContainers(ListSupportedContainersRequest) returns (ListSupportedContainersResponse);
+}
+
+enum ModelType {
+  MODEL_TYPE_UNSPECIFIED = 0;
+  MODEL_TYPE_SINGLE_LABEL_CLASSIFICATION = 1;
+  MODEL_TYPE_MULTI_LABEL_CLASSIFICATION = 2;
+  MODEL_TYPE_OBJECT_DETECTION = 3;
+}
+
+enum ModelFramework {
+  MODEL_FRAMEWORK_UNSPECIFIED = 0;
+  MODEL_FRAMEWORK_TFLITE = 1;
+  MODEL_FRAMEWORK_TENSORFLOW = 2;
+  MODEL_FRAMEWORK_PYTORCH = 3;
+  MODEL_FRAMEWORK_ONNX = 4;
+}
+
+message SubmitTrainingJobRequest {
+  string dataset_id = 7 [(tagger.v1.tags) = "bson:\"dataset_id\" json:\"dataset_id\""];
+  string organization_id = 2 [(tagger.v1.tags) = "bson:\"organization_id\" json:\"organization_id\""];
+  string model_name = 3 [(tagger.v1.tags) = "bson:\"model_name\" json:\"model_name\""];
+  string model_version = 4 [(tagger.v1.tags) = "bson:\"model_version\" json:\"model_version\""];
+  ModelType model_type = 5 [(tagger.v1.tags) = "bson:\"model_type\" json:\"model_type\""];
+  ModelFramework model_framework = 8 [(tagger.v1.tags) = "bson:\"model_framework\" json:\"model_framework\""];
+  repeated string tags = 6 [(tagger.v1.tags) = "bson:\"tags\" json:\"tags\""];
+
+  reserved 1;
+  reserved "filter";
+}
+
+message SubmitTrainingJobResponse {
+  string id = 1;
+}
+
+message SubmitCustomTrainingJobRequest {
+  string dataset_id = 1 [(tagger.v1.tags) = "bson:\"dataset_id\" json:\"dataset_id\""];
+  string registry_item_id = 2 [(tagger.v1.tags) = "bson:\"registry_item_id\" json:\"registry_item_id\""];
+  string registry_item_version = 6 [(tagger.v1.tags) = "bson:\"registry_item_version\" json:\"registry_item_version\""];
+  string organization_id = 3 [(tagger.v1.tags) = "bson:\"organization_id\" json:\"organization_id\""];
+  string model_name = 4 [(tagger.v1.tags) = "bson:\"model_name\" json:\"model_name\""];
+  string model_version = 5 [(tagger.v1.tags) = "bson:\"model_version\" json:\"model_version\""];
+  map<string, string> arguments = 7;
+  string container_version = 8;
+}
+
+message SubmitCustomTrainingJobResponse {
+  string id = 1;
+}
+
+message GetTrainingJobRequest {
+  string id = 1;
+}
+
+message GetTrainingJobResponse {
+  TrainingJobMetadata metadata = 1;
+}
+
+message ListTrainingJobsRequest {
+  string organization_id = 1;
+  TrainingStatus status = 2;
+}
+
+message ListTrainingJobsResponse {
+  repeated TrainingJobMetadata jobs = 1;
+}
+
+enum TrainingStatus {
+  TRAINING_STATUS_UNSPECIFIED = 0;
+  TRAINING_STATUS_PENDING = 1;
+  TRAINING_STATUS_IN_PROGRESS = 2;
+  TRAINING_STATUS_COMPLETED = 3;
+  TRAINING_STATUS_FAILED = 4;
+  TRAINING_STATUS_CANCELED = 5;
+  TRAINING_STATUS_CANCELING = 6;
+}
+
+message TrainingJobMetadata {
+  string id = 7 [(tagger.v1.tags) = "bson:\"_id\" json:\"id,omitempty\""];
+  string dataset_id = 11 [(tagger.v1.tags) = "bson:\"dataset_id\" json:\"dataset_id\""];
+  string organization_id = 12 [(tagger.v1.tags) = "bson:\"organization_id\" json:\"organization_id\""];
+  string model_name = 13 [(tagger.v1.tags) = "bson:\"model_name\" json:\"model_name\""];
+  string model_version = 14 [(tagger.v1.tags) = "bson:\"model_version\" json:\"model_version\""];
+  ModelType model_type = 15 [(tagger.v1.tags) = "bson:\"model_type\" json:\"model_type\""];
+  ModelFramework model_framework = 17 [(tagger.v1.tags) = "bson:\"model_framework\" json:\"model_framework\""];
+  bool is_custom_job = 18 [(tagger.v1.tags) = "bson:\"is_custom_job\" json:\"is_custom_job\""];
+  string registry_item_id = 19 [(tagger.v1.tags) = "bson:\"registry_item_id\" json:\"registry_item_id\""];
+  string registry_item_version = 20 [(tagger.v1.tags) = "bson:\"registry_item_version\" json:\"registry_item_version\""];
+  TrainingStatus status = 2 [(tagger.v1.tags) = "bson:\"status\" json:\"status\""];
+  google.rpc.Status error_status = 8 [(tagger.v1.tags) = "bson:\"error_status\" json:\"error_status\""];
+  google.protobuf.Timestamp created_on = 3 [(tagger.v1.tags) = "bson:\"created_on\" json:\"created_on\""];
+  google.protobuf.Timestamp last_modified = 4 [(tagger.v1.tags) = "bson:\"last_modified\" json:\"last_modified\""];
+  google.protobuf.Timestamp training_started = 9 [(tagger.v1.tags) = "bson:\"training_started\" json:\"training_started\""];
+  google.protobuf.Timestamp training_ended = 10 [(tagger.v1.tags) = "bson:\"training_ended\" json:\"training_ended\""];
+  string synced_model_id = 5 [(tagger.v1.tags) = "bson:\"synced_model_id\" json:\"synced_model_id\""];
+  repeated string tags = 16 [(tagger.v1.tags) = "bson:\"tags\" json:\"tags\""];
+  map<string, string> arguments = 21 [(tagger.v1.tags) = "bson:\"arguments\" json:\"arguments\""];
+  string container_version = 22 [(tagger.v1.tags) = "bson:\"container_version\" json:\"container_version\""];
+
+  reserved 1, 6;
+  reserved "request", "user_email";
+}
+
+message CancelTrainingJobRequest {
+  string id = 1;
+}
+
+message CancelTrainingJobResponse {}
+
+message DeleteCompletedTrainingJobRequest {
+  string id = 1;
+}
+
+message DeleteCompletedTrainingJobResponse {}
+
+message TrainingJobLogEntry {
+  string level = 1;
+  google.protobuf.Timestamp time = 2;
+  string message = 3;
+}
+
+message GetTrainingJobLogsRequest {
+  string id = 1;
+  optional string page_token = 2;
+}
+
+message GetTrainingJobLogsResponse {
+  repeated TrainingJobLogEntry logs = 1;
+  string next_page_token = 2;
+}
+
+message ListSupportedContainersRequest {}
+
+message ListSupportedContainersResponse {
+  map<string, Container> container_map = 1;
+  // ex value:
+  // container_map: {
+  //   "tf:2.15": Container {
+  //     key: "tf:2.15"
+  //     uri: "us-docker.pkg.dev/vertex-ai/training/tf-gpu.2-15.py310:latest"
+  //     description: "Tensorflow 2.15"
+  //     eol: { seconds: 1772630400, nanos: 0 } // 2026-03-03T00:00:00Z
+  //   }
+  // }
+}
+
+message Container {
+  string key = 1;
+  string uri = 2;
+  string framework = 3;
+  string description = 4;
+  google.protobuf.Timestamp eol = 5;
+}

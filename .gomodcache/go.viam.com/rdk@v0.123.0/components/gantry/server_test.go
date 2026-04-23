@@ -1,0 +1,314 @@
+package gantry_test
+
+import (
+	"context"
+	"testing"
+
+	"github.com/pkg/errors"
+	commonpb "go.viam.com/api/common/v1"
+	pb "go.viam.com/api/component/gantry/v1"
+	"go.viam.com/test"
+	"go.viam.com/utils/protoutils"
+
+	"go.viam.com/rdk/components/gantry"
+	"go.viam.com/rdk/logging"
+	"go.viam.com/rdk/referenceframe"
+	"go.viam.com/rdk/resource"
+	"go.viam.com/rdk/spatialmath"
+	"go.viam.com/rdk/testutils/inject"
+	"go.viam.com/rdk/utils"
+)
+
+const (
+	testGantryName    = "gantry1"
+	testGantryName2   = "gantry2"
+	failGantryName    = "gantry3"
+	missingGantryName = "gantry4"
+)
+
+var (
+	errPositionFailed          = errors.New("couldn't get position")
+	errHomingFailed            = errors.New("homing unsuccessful")
+	errMoveToPositionFailed    = errors.New("couldn't move to position")
+	errLengthsFailed           = errors.New("couldn't get lengths")
+	errStopFailed              = errors.New("couldn't stop")
+	errGantryNotFound          = errors.New("not found")
+	errKinematicsUnimplemented = errors.New("Kinematics unimplemented")
+	errGeometriesUnimplemented = errors.New("Geometries unimplemented")
+	errGetStatusFailed         = errors.New("can't get status")
+)
+
+func newServer(logger logging.Logger) (pb.GantryServiceServer, *inject.Gantry, *inject.Gantry, error) {
+	injectGantry := &inject.Gantry{}
+	injectGantry2 := &inject.Gantry{}
+	gantries := map[resource.Name]gantry.Gantry{
+		gantry.Named(testGantryName): injectGantry,
+		gantry.Named(failGantryName): injectGantry2,
+	}
+	gantrySvc, err := resource.NewAPIResourceCollection(gantry.API, gantries)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	return gantry.NewRPCServiceServer(gantrySvc, logger).(pb.GantryServiceServer), injectGantry, injectGantry2, nil
+}
+
+func TestServer(t *testing.T) {
+	gantryServer, injectGantry, injectGantry2, err := newServer(logging.NewTestLogger(t))
+	test.That(t, err, test.ShouldBeNil)
+
+	var gantryPos []float64
+	var gantrySpeed []float64
+
+	goodKinematicsJSON := func(ctx context.Context) (referenceframe.Model, error) {
+		model, err := referenceframe.ParseModelJSONFile(utils.ResolveFile("referenceframe/testfiles/example_gantry.json"), "foo")
+		if err != nil {
+			return nil, err
+		}
+
+		return model, nil
+	}
+
+	pos1 := []float64{1.0, 2.0, 3.0}
+	speed1 := []float64{100.0, 200.0, 300.0}
+	len1 := []float64{2.0, 3.0, 4.0}
+	extra1 := map[string]interface{}{}
+	injectGantry.PositionFunc = func(ctx context.Context, extra map[string]interface{}) ([]float64, error) {
+		extra1 = extra
+		return pos1, nil
+	}
+	injectGantry.HomeFunc = func(ctx context.Context, extra map[string]interface{}) (bool, error) {
+		extra1 = extra
+		return true, nil
+	}
+	injectGantry.MoveToPositionFunc = func(ctx context.Context, pos, speed []float64, extra map[string]interface{}) error {
+		gantryPos = pos
+		gantrySpeed = speed
+		extra1 = extra
+		return nil
+	}
+	injectGantry.LengthsFunc = func(ctx context.Context, extra map[string]interface{}) ([]float64, error) {
+		extra1 = extra
+		return len1, nil
+	}
+	injectGantry.StopFunc = func(ctx context.Context, extra map[string]interface{}) error {
+		extra1 = extra
+		return nil
+	}
+	injectGantry.KinematicsFunc = goodKinematicsJSON
+	injectGantry.GeometriesFunc = func(ctx context.Context) ([]spatialmath.Geometry, error) {
+		return nil, errGeometriesUnimplemented
+	}
+
+	pos2 := []float64{4.0, 5.0, 6.0}
+	speed2 := []float64{100.0, 80.0, 120.0}
+	injectGantry2.PositionFunc = func(ctx context.Context, extra map[string]interface{}) ([]float64, error) {
+		return nil, errPositionFailed
+	}
+	injectGantry2.HomeFunc = func(ctx context.Context, extra map[string]interface{}) (bool, error) {
+		extra1 = extra
+		return false, errHomingFailed
+	}
+	injectGantry2.MoveToPositionFunc = func(ctx context.Context, pos, speed []float64, extra map[string]interface{}) error {
+		gantryPos = pos
+		gantrySpeed = speed
+		return errMoveToPositionFailed
+	}
+	injectGantry2.LengthsFunc = func(ctx context.Context, extra map[string]interface{}) ([]float64, error) {
+		return nil, errLengthsFailed
+	}
+	injectGantry2.StopFunc = func(ctx context.Context, extra map[string]interface{}) error {
+		return errStopFailed
+	}
+	injectGantry2.KinematicsFunc = func(ctx context.Context) (referenceframe.Model, error) {
+		return nil, errKinematicsUnimplemented
+	}
+
+	//nolint:dupl
+	t.Run("gantry position", func(t *testing.T) {
+		_, err := gantryServer.GetPosition(context.Background(), &pb.GetPositionRequest{Name: missingGantryName})
+		test.That(t, err, test.ShouldNotBeNil)
+		test.That(t, err.Error(), test.ShouldContainSubstring, errGantryNotFound.Error())
+
+		ext, err := protoutils.StructToStructPb(map[string]interface{}{"foo": "123", "bar": 234})
+		test.That(t, err, test.ShouldBeNil)
+		resp, err := gantryServer.GetPosition(context.Background(), &pb.GetPositionRequest{Name: testGantryName, Extra: ext})
+		test.That(t, err, test.ShouldBeNil)
+		test.That(t, resp.PositionsMm, test.ShouldResemble, pos1)
+		test.That(t, extra1, test.ShouldResemble, map[string]interface{}{"foo": "123", "bar": 234.})
+
+		_, err = gantryServer.GetPosition(context.Background(), &pb.GetPositionRequest{Name: failGantryName})
+		test.That(t, err, test.ShouldNotBeNil)
+		test.That(t, err.Error(), test.ShouldContainSubstring, errPositionFailed.Error())
+
+		// Redefine Positionfunc to test nil return
+		injectGantry.PositionFunc = func(ctx context.Context, extra map[string]interface{}) ([]float64, error) {
+			return nil, nil
+		}
+		resp, err = gantryServer.GetPosition(context.Background(), &pb.GetPositionRequest{Name: testGantryName, Extra: ext})
+		test.That(t, err, test.ShouldBeNil)
+		test.That(t, resp.PositionsMm, test.ShouldResemble, []float64{})
+	})
+
+	t.Run("move to position", func(t *testing.T) {
+		_, err := gantryServer.MoveToPosition(
+			context.Background(),
+			&pb.MoveToPositionRequest{Name: missingGantryName, PositionsMm: pos2, SpeedsMmPerSec: speed2},
+		)
+		test.That(t, err, test.ShouldNotBeNil)
+		test.That(t, err.Error(), test.ShouldContainSubstring, errGantryNotFound.Error())
+
+		ext, err := protoutils.StructToStructPb(map[string]interface{}{"foo": "234", "bar": 345})
+		test.That(t, err, test.ShouldBeNil)
+		_, err = gantryServer.MoveToPosition(
+			context.Background(),
+			&pb.MoveToPositionRequest{Name: testGantryName, PositionsMm: pos2, SpeedsMmPerSec: speed2, Extra: ext},
+		)
+		test.That(t, err, test.ShouldBeNil)
+		test.That(t, gantryPos, test.ShouldResemble, pos2)
+		test.That(t, gantrySpeed, test.ShouldResemble, speed2)
+		test.That(t, extra1, test.ShouldResemble, map[string]interface{}{"foo": "234", "bar": 345.})
+
+		_, err = gantryServer.MoveToPosition(
+			context.Background(),
+			&pb.MoveToPositionRequest{Name: failGantryName, PositionsMm: pos1, SpeedsMmPerSec: speed1},
+		)
+		test.That(t, err, test.ShouldNotBeNil)
+		test.That(t, err.Error(), test.ShouldContainSubstring, errMoveToPositionFailed.Error())
+		test.That(t, gantryPos, test.ShouldResemble, pos1)
+		test.That(t, gantrySpeed, test.ShouldResemble, speed1)
+	})
+
+	//nolint:dupl
+	t.Run("lengths", func(t *testing.T) {
+		_, err := gantryServer.GetLengths(context.Background(), &pb.GetLengthsRequest{Name: missingGantryName})
+		test.That(t, err, test.ShouldNotBeNil)
+		test.That(t, err.Error(), test.ShouldContainSubstring, errGantryNotFound.Error())
+
+		ext, err := protoutils.StructToStructPb(map[string]interface{}{"foo": 123, "bar": "234"})
+		test.That(t, err, test.ShouldBeNil)
+		resp, err := gantryServer.GetLengths(context.Background(), &pb.GetLengthsRequest{Name: testGantryName, Extra: ext})
+		test.That(t, err, test.ShouldBeNil)
+		test.That(t, resp.LengthsMm, test.ShouldResemble, len1)
+		test.That(t, extra1, test.ShouldResemble, map[string]interface{}{"foo": 123., "bar": "234"})
+
+		_, err = gantryServer.GetLengths(context.Background(), &pb.GetLengthsRequest{Name: failGantryName})
+		test.That(t, err, test.ShouldNotBeNil)
+		test.That(t, err.Error(), test.ShouldContainSubstring, errLengthsFailed.Error())
+
+		// Redefine Lengthsfunc to test nil return
+		injectGantry.LengthsFunc = func(ctx context.Context, extra map[string]interface{}) ([]float64, error) {
+			return nil, nil
+		}
+		resp, err = gantryServer.GetLengths(context.Background(), &pb.GetLengthsRequest{Name: testGantryName, Extra: ext})
+		test.That(t, err, test.ShouldBeNil)
+		test.That(t, resp.LengthsMm, test.ShouldResemble, []float64{})
+	})
+
+	t.Run("home", func(t *testing.T) {
+		_, err := gantryServer.Home(context.Background(), &pb.HomeRequest{Name: missingGantryName})
+		test.That(t, err, test.ShouldNotBeNil)
+		test.That(t, err.Error(), test.ShouldContainSubstring, errGantryNotFound.Error())
+
+		ext, err := protoutils.StructToStructPb(map[string]interface{}{"foo": 123, "bar": "234"})
+		test.That(t, err, test.ShouldBeNil)
+		resp, err := gantryServer.Home(context.Background(), &pb.HomeRequest{Name: testGantryName, Extra: ext})
+		test.That(t, err, test.ShouldBeNil)
+		test.That(t, resp.Homed, test.ShouldBeTrue)
+		test.That(t, extra1, test.ShouldResemble, map[string]interface{}{"foo": 123., "bar": "234"})
+
+		resp, err = gantryServer.Home(context.Background(), &pb.HomeRequest{Name: failGantryName})
+		test.That(t, err, test.ShouldNotBeNil)
+		test.That(t, resp.Homed, test.ShouldBeFalse)
+		test.That(t, err.Error(), test.ShouldContainSubstring, errHomingFailed.Error())
+	})
+
+	t.Run("stop", func(t *testing.T) {
+		_, err = gantryServer.Stop(context.Background(), &pb.StopRequest{Name: missingGantryName})
+		test.That(t, err, test.ShouldNotBeNil)
+		test.That(t, err.Error(), test.ShouldContainSubstring, errGantryNotFound.Error())
+
+		ext, err := protoutils.StructToStructPb(map[string]interface{}{"foo": 234, "bar": "123"})
+		test.That(t, err, test.ShouldBeNil)
+		_, err = gantryServer.Stop(context.Background(), &pb.StopRequest{Name: testGantryName, Extra: ext})
+		test.That(t, err, test.ShouldBeNil)
+		test.That(t, extra1, test.ShouldResemble, map[string]interface{}{"foo": 234., "bar": "123"})
+
+		_, err = gantryServer.Stop(context.Background(), &pb.StopRequest{Name: failGantryName})
+		test.That(t, err, test.ShouldNotBeNil)
+		test.That(t, err.Error(), test.ShouldContainSubstring, errStopFailed.Error())
+	})
+
+	t.Run("kinematics", func(t *testing.T) {
+		_, err := gantryServer.GetKinematics(context.Background(), &commonpb.GetKinematicsRequest{Name: missingGantryName})
+		test.That(t, err, test.ShouldNotBeNil)
+		test.That(t, err.Error(), test.ShouldContainSubstring, errGantryNotFound.Error())
+
+		resp, err := gantryServer.GetKinematics(context.Background(), &commonpb.GetKinematicsRequest{Name: testGantryName})
+		test.That(t, err, test.ShouldBeNil)
+		test.That(t, resp, test.ShouldNotBeNil)
+		test.That(t, resp.Format, test.ShouldEqual, commonpb.KinematicsFileFormat_KINEMATICS_FILE_FORMAT_SVA)
+
+		_, err = gantryServer.GetKinematics(context.Background(), &commonpb.GetKinematicsRequest{Name: failGantryName})
+		test.That(t, err, test.ShouldNotBeNil)
+		test.That(t, err.Error(), test.ShouldContainSubstring, errKinematicsUnimplemented.Error())
+	})
+
+	t.Run("geometries", func(t *testing.T) {
+		// geometries only works for single axis (multi-axis is a controller of multiple single-axis gantries)
+		injectGantry.PositionFunc = func(ctx context.Context, extra map[string]interface{}) ([]float64, error) {
+			return []float64{51.0}, nil
+		}
+		geometries, err := gantryServer.GetGeometries(context.Background(), &commonpb.GetGeometriesRequest{Name: testGantryName})
+		test.That(t, err, test.ShouldBeNil)
+		test.That(t, len(geometries.Geometries), test.ShouldEqual, 1)
+		test.That(
+			t,
+			AssertPosesClose(
+				geometries.Geometries[0].Center,
+				&commonpb.Pose{
+					X:     1.0,
+					Y:     0.0,
+					Z:     5.0,
+					OX:    0.0,
+					OY:    0.0,
+					OZ:    1.0,
+					Theta: 0.0,
+				},
+			),
+			test.ShouldBeTrue,
+		)
+	})
+
+	t.Run("GetStatus", func(t *testing.T) {
+		_, err := gantryServer.GetStatus(context.Background(), &commonpb.GetStatusRequest{Name: missingGantryName})
+		test.That(t, err, test.ShouldNotBeNil)
+		test.That(t, err.Error(), test.ShouldContainSubstring, errGantryNotFound.Error())
+
+		resp, err := gantryServer.GetStatus(context.Background(), &commonpb.GetStatusRequest{Name: testGantryName})
+		test.That(t, err, test.ShouldBeNil)
+		test.That(t, resp.Result.AsMap(), test.ShouldBeEmpty)
+
+		expectedStatus := map[string]interface{}{"key": "value", "count": float64(42)}
+		injectGantry.StatusFunc = func(ctx context.Context) (map[string]interface{}, error) {
+			return expectedStatus, nil
+		}
+		resp, err = gantryServer.GetStatus(context.Background(), &commonpb.GetStatusRequest{Name: testGantryName})
+		test.That(t, err, test.ShouldBeNil)
+		test.That(t, resp.Result.AsMap(), test.ShouldResemble, expectedStatus)
+
+		injectGantry.StatusFunc = func(ctx context.Context) (map[string]interface{}, error) {
+			return nil, errGetStatusFailed
+		}
+		_, err = gantryServer.GetStatus(context.Background(), &commonpb.GetStatusRequest{Name: testGantryName})
+		test.That(t, err, test.ShouldNotBeNil)
+		test.That(t, err.Error(), test.ShouldContainSubstring, errGetStatusFailed.Error())
+		injectGantry.StatusFunc = nil
+	})
+}
+
+func AssertPosesClose(expected, actual *commonpb.Pose) bool {
+	return spatialmath.PoseAlmostEqual(
+		spatialmath.NewPoseFromProtobuf(expected),
+		spatialmath.NewPoseFromProtobuf(actual),
+	)
+}

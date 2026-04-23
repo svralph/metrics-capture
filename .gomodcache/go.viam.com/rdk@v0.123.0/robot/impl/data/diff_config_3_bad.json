@@ -1,0 +1,76 @@
+{
+    "components": [
+        {
+            "name": "arm1",
+            "type": "arm",
+            "model": "fake",
+            "attributes": {
+                "arm-model": ""
+            }
+        },
+        {
+            "name": "base2",
+            "type": "base",
+            "model": "fake",
+            "attributes": {
+                "three": 4
+            }
+        },
+        {
+            "name": "board1",
+            "type": "board",
+            "model": "fake",
+            "attributes": {
+                "analogs": [
+                    {
+                        "name": "analog1",
+                        "pin": "1"
+                    }
+                ],
+                "digital_interrupts": [
+                    {
+                        "name": "encoder",
+                        "pin": "15"
+                    }
+                ]
+            }
+        },
+        {
+            "name": "board2",
+            "type": "board",
+            "model": "fake",
+            "attributes": {
+                "digital_interrupts": [
+                    {
+                        "name": "encoder2",
+                        "pin": "16"
+                    }
+                ]
+            }
+        }
+    ],
+    "processes": [
+        {
+            "id": "1",
+            "name": "echo",
+            "args": [
+                "hello",
+                "world",
+                "again"
+            ],
+            "one_shot": true
+        },
+        {
+            "id": "3",
+            "name": "echo",
+            "args": [
+                "hello",
+                "world",
+                "again",
+                "other",
+                "ultimate"
+            ],
+            "one_shot": true
+        }
+    ]
+}

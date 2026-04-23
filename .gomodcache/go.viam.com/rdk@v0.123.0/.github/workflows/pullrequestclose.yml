@@ -1,0 +1,28 @@
+name: Pull Request Close
+
+concurrency: 
+  group: pullrequest-${{ github.head_ref }}
+  cancel-in-progress: true
+
+on:
+  pull_request_target:
+    branches: [ main ]
+    types: [ closed ]
+
+jobs:
+  clean_binaries:
+    name: Remove PR AppImages/Binaries
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Authorize GCP
+      uses: google-github-actions/auth@v2
+      with:
+        credentials_json: '${{ secrets.GCP_CREDENTIALS }}'
+
+    - name: Set up Cloud SDK
+      uses: google-github-actions/setup-gcloud@v2
+
+    - name: Delete Files
+      run: |
+        gsutil rm "gs://packages.viam.com/apps/viam-server/viam-server-pr-${{ github.event.pull_request.number }}-*" || true

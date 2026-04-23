@@ -1,0 +1,74 @@
+{
+    "remotes": [
+        {
+            "name": "remote1",
+            "address": "addr3"
+        },
+        {
+            "name": "remote2",
+            "address": "addr4"
+        }
+    ],
+    "components": [
+        {
+            "name": "arm1",
+            "type": "arm",
+            "model": "acme:test:model",
+            "attributes": {
+                "two": 2
+            }
+        },
+        {
+            "name": "base2",
+            "type": "base",
+            "model": "fake"
+        },
+        {
+            "name": "board1",
+            "type": "board",
+            "model": "fake",
+            "attributes": {
+                "analogs": [
+                    {
+                        "name": "analog1",
+                        "pin": "1"
+                    }
+                ]
+            }
+        },
+        {
+            "name": "board2",
+            "type": "board",
+            "model": "fake",
+            "attributes": {
+                "digital_interrupts": [
+                    {
+                        "name": "encoder2",
+                        "pin": "16"
+                    }
+                ]
+            }
+        }
+    ],
+    "processes": [
+        {
+            "id": "1",
+            "name": "echo",
+            "args": [
+                "hello",
+                "world",
+                "again"
+            ],
+            "one_shot": true
+        },
+        {
+            "id": "3",
+            "name": "bash",
+            "args": [
+                "-c",
+                "trap \"exit 0\" SIGINT; while true; do echo world; sleep 2; done"
+            ],
+            "log": true
+        }
+    ]
+}

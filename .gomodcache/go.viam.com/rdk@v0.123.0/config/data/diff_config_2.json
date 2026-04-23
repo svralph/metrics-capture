@@ -1,0 +1,77 @@
+{
+    "modules": [
+        {
+            "name": "my-module",
+            "executable_path": "..",
+            "log_level": "debug"
+        }
+    ],
+    "remotes": [
+        {
+            "name": "remote1",
+            "address": "addr3"
+        },
+        {
+            "name": "remote2",
+            "address": "addr4"
+        }
+    ],
+    "components": [
+        {
+            "name": "arm1",
+            "type": "arm",
+            "model": "fake",
+            "attributes": {
+                "two": 2
+            }
+        },
+        {
+            "name": "base1",
+            "type": "base",
+            "model": "acme:test:model",
+            "attributes": {
+                "three": 3
+            }
+        },
+        {
+            "name": "board1",
+            "type": "board",
+            "model": "fake",
+            "attributes": {
+                "analogs": [
+                    {
+                        "name": "analog1",
+                        "pin": "1"
+                    }
+                ],
+                "digital_interrupts": [
+                    {
+                        "name": "encoder",
+                        "pin": "15"
+                    }
+                ]
+            }
+        }
+    ],
+    "processes": [
+        {
+            "id": "1",
+            "name": "echo",
+            "args": [
+                "hello",
+                "world",
+                "again"
+            ],
+            "one_shot": true
+        },
+        {
+            "id": "2",
+            "name": "bash",
+            "args": [
+                "-c",
+                "trap \"exit 0\" SIGINT; while true; do echo hello; sleep 2; done"
+            ],
+            "log": true
+        }
+    ]
+}

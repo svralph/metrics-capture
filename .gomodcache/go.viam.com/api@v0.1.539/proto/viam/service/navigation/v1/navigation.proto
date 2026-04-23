@@ -1,0 +1,186 @@
+syntax = "proto3";
+
+package viam.service.navigation.v1;
+
+import "common/v1/common.proto";
+import "google/api/annotations.proto";
+import "google/protobuf/struct.proto";
+
+option go_package = "go.viam.com/api/service/navigation/v1";
+option java_package = "com.viam.service.navigation.v1";
+
+// A NavigationService declares the gRPC contract for a Navigation service
+service NavigationService {
+  rpc GetMode(GetModeRequest) returns (GetModeResponse) {
+    option (google.api.http) = {get: "/viam/api/v1/service/navigation/{name}/mode"};
+  }
+
+  rpc SetMode(SetModeRequest) returns (SetModeResponse) {
+    option (google.api.http) = {put: "/viam/api/v1/service/navigation/{name}/mode"};
+  }
+
+  rpc GetLocation(GetLocationRequest) returns (GetLocationResponse) {
+    option (google.api.http) = {get: "/viam/api/v1/service/navigation/{name}/location"};
+  }
+
+  rpc GetWaypoints(GetWaypointsRequest) returns (GetWaypointsResponse) {
+    option (google.api.http) = {get: "/viam/api/v1/service/navigation/{name}/waypoints"};
+  }
+
+  rpc AddWaypoint(AddWaypointRequest) returns (AddWaypointResponse) {
+    option (google.api.http) = {post: "/viam/api/v1/service/navigation/{name}/waypoints"};
+  }
+
+  rpc RemoveWaypoint(RemoveWaypointRequest) returns (RemoveWaypointResponse) {
+    option (google.api.http) = {delete: "/viam/api/v1/service/navigation/{name}/waypoints/{id}"};
+  }
+
+  rpc GetObstacles(GetObstaclesRequest) returns (GetObstaclesResponse) {
+    option (google.api.http) = {get: "/viam/api/v1/service/navigation/{name}/get_obstacles"};
+  }
+
+  rpc GetPaths(GetPathsRequest) returns (GetPathsResponse) {
+    option (google.api.http) = {get: "/viam/api/v1/service/navigation/{name}/get_paths"};
+  }
+
+  // GetProperties returns properties of the current navigation service, including the
+  // map_type being operated on.
+  rpc GetProperties(GetPropertiesRequest) returns (GetPropertiesResponse) {
+    option (google.api.http) = {get: "/viam/api/v1/service/navigation/{name}/properties"};
+  }
+
+  // DoCommand sends/receives arbitrary commands
+  rpc DoCommand(common.v1.DoCommandRequest) returns (common.v1.DoCommandResponse) {
+    option (google.api.http) = {post: "/viam/api/v1/service/navigation/{name}/do_command"};
+  }
+
+  // GetStatus returns the status of the resource
+  rpc GetStatus(common.v1.GetStatusRequest) returns (common.v1.GetStatusResponse) {
+    option (google.api.http) = {get: "/viam/api/v1/service/navigation/{name}/get_status"};
+  }
+}
+
+// MapType represents the various types of maps the navigation service can ingest.
+enum MapType {
+  MAP_TYPE_UNSPECIFIED = 0;
+  MAP_TYPE_NONE = 1;
+  MAP_TYPE_GPS = 2;
+}
+
+enum Mode {
+  MODE_UNSPECIFIED = 0;
+  MODE_MANUAL = 1;
+  MODE_WAYPOINT = 2;
+  MODE_EXPLORE = 3;
+}
+
+message GetModeRequest {
+  string name = 1;
+  // Additional arguments to the method
+  google.protobuf.Struct extra = 99;
+}
+
+message GetModeResponse {
+  Mode mode = 1;
+}
+
+message SetModeRequest {
+  string name = 1;
+  Mode mode = 2;
+  // Additional arguments to the method
+  google.protobuf.Struct extra = 99;
+}
+
+message SetModeResponse {}
+
+message Waypoint {
+  string id = 1;
+  common.v1.GeoPoint location = 2;
+}
+
+message GetLocationRequest {
+  string name = 1;
+  // Additional arguments to the method
+  google.protobuf.Struct extra = 99;
+}
+
+message GetLocationResponse {
+  common.v1.GeoPoint location = 1;
+  // A number from [0-360) where 0 is north
+  // 90 is east, 180 is south, 270 is west
+  double compass_heading = 2;
+}
+
+message GetWaypointsRequest {
+  string name = 1;
+  // Additional arguments to the method
+  google.protobuf.Struct extra = 99;
+}
+
+message GetWaypointsResponse {
+  repeated Waypoint waypoints = 1;
+}
+
+message AddWaypointRequest {
+  string name = 1;
+  common.v1.GeoPoint location = 2;
+  // Additional arguments to the method
+  google.protobuf.Struct extra = 99;
+}
+
+message AddWaypointResponse {}
+
+message RemoveWaypointRequest {
+  string name = 1;
+  string id = 2;
+  // Additional arguments to the method
+  google.protobuf.Struct extra = 99;
+}
+
+message RemoveWaypointResponse {}
+
+// GetObstacles will return the geopoint location and geometry of all
+// known obstacles on the navigation map. Obstacles that are detected
+// through the vision service will only be returned if this endpoint is called
+// when the robot is sensing the obstacle
+message GetObstaclesRequest {
+  string name = 1;
+  // Additional arguments to the method
+  google.protobuf.Struct extra = 99;
+}
+
+message GetObstaclesResponse {
+  // List of all known geometries
+  repeated common.v1.GeoGeometry obstacles = 1;
+}
+
+// A user provided destination and the set of geopoints that
+// the robot is expected to take to get there
+message Path {
+  // The id of the user specified waypoint
+  string destination_waypoint_id = 1;
+  // List of geopoints that the motion planner output to reach the destination
+  // The first geopoint is the starting position of the robot for that path
+  repeated common.v1.GeoPoint geopoints = 2;
+}
+
+// Returns all the paths known to the navigation service
+message GetPathsRequest {
+  // Name of the navigation service
+  string name = 1;
+  google.protobuf.Struct extra = 99;
+}
+
+message GetPathsResponse {
+  repeated Path paths = 1;
+}
+
+message GetPropertiesRequest {
+  // Name of the navigation service
+  string name = 1;
+}
+
+// Returns properties information for the named navigation service
+message GetPropertiesResponse {
+  MapType map_type = 1;
+}

@@ -1,0 +1,6120 @@
+// Package cli contains all business logic needed by the CLI command.
+package cli
+
+import (
+	"bufio"
+	"context"
+	"encoding/json"
+	"fmt"
+	"io"
+	"io/fs"
+	"math"
+	"net"
+	"net/http"
+	"net/url"
+	"os"
+	"os/exec"
+	"os/signal"
+	"path"
+	"path/filepath"
+	"runtime"
+	"runtime/debug"
+	"strconv"
+	"strings"
+	"sync"
+	"time"
+
+	"github.com/Masterminds/semver/v3"
+	"github.com/charmbracelet/huh"
+	"github.com/fullstorydev/grpcurl"
+	"github.com/google/uuid"
+	"github.com/jhump/protoreflect/grpcreflect"
+	"github.com/ktr0731/go-fuzzyfinder"
+	"github.com/nathan-fiscaletti/consolesize-go"
+	"github.com/pkg/errors"
+	cron "github.com/robfig/cron/v3"
+	"github.com/urfave/cli/v3"
+	"go.uber.org/multierr"
+	"go.uber.org/zap"
+	buildpb "go.viam.com/api/app/build/v1"
+	datapb "go.viam.com/api/app/data/v1"
+	datapipelinespb "go.viam.com/api/app/datapipelines/v1"
+	datasetpb "go.viam.com/api/app/dataset/v1"
+	mlinferencepb "go.viam.com/api/app/mlinference/v1"
+	mltrainingpb "go.viam.com/api/app/mltraining/v1"
+	packagepb "go.viam.com/api/app/packages/v1"
+	apppb "go.viam.com/api/app/v1"
+	commonpb "go.viam.com/api/common/v1"
+	"go.viam.com/utils"
+	"go.viam.com/utils/protoutils"
+	"go.viam.com/utils/rpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/metadata"
+	reflectpb "google.golang.org/grpc/reflection/grpc_reflection_v1alpha"
+	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/types/known/structpb"
+	"google.golang.org/protobuf/types/known/timestamppb"
+
+	"go.viam.com/rdk/cli/module_generate/modulegen"
+	rconfig "go.viam.com/rdk/config"
+	"go.viam.com/rdk/grpc"
+	"go.viam.com/rdk/logging"
+	"go.viam.com/rdk/resource"
+	"go.viam.com/rdk/robot/client"
+	"go.viam.com/rdk/services/shell"
+	rutils "go.viam.com/rdk/utils"
+)
+
+const (
+	rdkReleaseURL = "https://api.github.com/repos/viamrobotics/rdk/releases/latest"
+	osWindows     = "windows"
+	// defaultNumLogs is the same as the number of logs currently returned by app
+	// in a single GetRobotPartLogsResponse.
+	defaultNumLogs = 100
+	// maxNumLogs is an arbitrary limit used to stop CLI users from overwhelming
+	// our logs DB with heavy reads.
+	maxNumLogs = 10000
+	// logoMaxSize is the maximum size of a logo in bytes.
+	logoMaxSize = 1024 * 200 // 200 KB
+	// defaultLogStartTime is set to the last 12 hours,
+	// logs older than 24 hours are stored in the online archive.
+	//
+	// 12 hours is a temporary decrease from the matching 24 hour window to
+	// avoid an edge case where network latency always triggers an online
+	// archive query and causes a "resource usage limit exceeded" error.
+	defaultLogStartTime = -12 * time.Hour
+	// yellow is the format string used to output warnings in yellow color.
+	yellow = "\033[1;33m%s\033[0m"
+)
+
+var (
+	errNoShellService = errors.New("shell service is not enabled on this machine part")
+	ftdcPath          = path.Join("~", ".viam", "diagnostics.data")
+)
+
+// viamClient wraps a cli.Context and provides all the CLI command functionality
+// needed to talk to the app and data services but not directly to robot parts.
+type viamClient struct {
+	c                   *cli.Command
+	conf                *Config
+	client              apppb.AppServiceClient
+	dataClient          datapb.DataServiceClient
+	packageClient       packagepb.PackageServiceClient
+	datasetClient       datasetpb.DatasetServiceClient
+	datapipelinesClient datapipelinespb.DataPipelinesServiceClient
+	mlTrainingClient    mltrainingpb.MLTrainingServiceClient
+	mlInferenceClient   mlinferencepb.MLInferenceServiceClient
+	buildClient         buildpb.BuildServiceClient
+	baseURL             *url.URL
+	authFlow            *authFlow
+
+	selectedOrg *apppb.Organization
+	selectedLoc *apppb.Location
+
+	// caches
+	orgs *[]*apppb.Organization
+	locs *[]*apppb.Location
+}
+
+// ListOrganizationsAction is the corresponding Action for 'organizations list'.
+func ListOrganizationsAction(ctx context.Context, cmd *cli.Command, args emptyArgs) error {
+	c, err := newViamClient(ctx, cmd)
+	if err != nil {
+		return err
+	}
+	return c.listOrganizationsAction(ctx, cmd)
+}
+
+func (c *viamClient) listOrganizationsAction(ctx context.Context, cmd *cli.Command) error {
+	orgs, err := c.listOrganizations(ctx)
+	if err != nil {
+		return errors.Wrap(err, "could not list organizations")
+	}
+	for i, org := range orgs {
+		if i == 0 {
+			printf(cmd.Root().Writer, "Organizations for %q:", c.conf.Auth)
+		}
+		idInfo := fmt.Sprintf("(id: %s)", org.Id)
+		namespaceInfo := ""
+		if org.PublicNamespace != "" {
+			namespaceInfo = fmt.Sprintf(" (namespace: %s)", org.PublicNamespace)
+		}
+		printf(cmd.Root().Writer, "\t%s %s%s", org.Name, idInfo, namespaceInfo)
+	}
+	return nil
+}
+
+type organizationsSupportEmailSetArgs struct {
+	OrgID        string
+	SupportEmail string
+}
+
+// OrganizationsSupportEmailSetAction corresponds to `organizations support-email set`.
+func OrganizationsSupportEmailSetAction(ctx context.Context, cmd *cli.Command, args organizationsSupportEmailSetArgs) error {
+	c, err := newViamClient(ctx, cmd)
+	if err != nil {
+		return err
+	}
+
+	orgID := args.OrgID
+	if orgID == "" {
+		return errors.New("cannot set support email without an organization ID")
+	}
+
+	supportEmail := args.SupportEmail
+	if supportEmail == "" {
+		return errors.New("cannot set support email to an empty string")
+	}
+
+	return c.organizationsSupportEmailSetAction(ctx, cmd, orgID, supportEmail)
+}
+
+func (c *viamClient) organizationsSupportEmailSetAction(ctx context.Context, cmd *cli.Command, orgID, supportEmail string) error {
+	_, err := c.client.OrganizationSetSupportEmail(ctx, &apppb.OrganizationSetSupportEmailRequest{
+		OrgId: orgID,
+		Email: supportEmail,
+	})
+	if err != nil {
+		return err
+	}
+	printf(cmd.Root().Writer, "Successfully set support email for organization %q to %q", orgID, supportEmail)
+	return nil
+}
+
+type organizationsSupportEmailGetArgs struct {
+	OrgID string
+}
+
+// OrganizationsSupportEmailGetAction corresponds to `organizations support-email get`.
+func OrganizationsSupportEmailGetAction(ctx context.Context, cmd *cli.Command, args organizationsSupportEmailGetArgs) error {
+	c, err := newViamClient(ctx, cmd)
+	if err != nil {
+		return err
+	}
+
+	orgID := args.OrgID
+	if orgID == "" {
+		return errors.New("cannot get support email without an organization ID")
+	}
+
+	return c.organizationsSupportEmailGetAction(ctx, cmd, orgID)
+}
+
+func (c *viamClient) organizationsSupportEmailGetAction(ctx context.Context, cmd *cli.Command, orgID string) error {
+	resp, err := c.client.OrganizationGetSupportEmail(ctx, &apppb.OrganizationGetSupportEmailRequest{
+		OrgId: orgID,
+	})
+	if err != nil {
+		return err
+	}
+
+	printf(cmd.Root().Writer, "Support email for organization %q: %q", orgID, resp.GetEmail())
+	return nil
+}
+
+type disableAuthServiceArgs struct {
+	OrgID string
+}
+
+// DisableAuthServiceConfirmation is the Before action for 'organizations auth-service disable'.
+// It asks for the user to confirm that they want to disable the auth service.
+func DisableAuthServiceConfirmation(ctx context.Context, cmd *cli.Command, args disableAuthServiceArgs) error {
+	if args.OrgID == "" {
+		return errors.New("cannot disable auth service without an organization ID")
+	}
+
+	printf(cmd.Root().Writer, yellow, "WARNING!!\n")
+	printf(cmd.Root().Writer, yellow, fmt.Sprintf("You are trying to disable the auth service for organization ID %s. "+
+		"Once disabled, all custom auth views and emails will be removed from your organization's (%s) "+
+		"OAuth applications and permanently deleted.\n", args.OrgID, args.OrgID))
+	printf(cmd.Root().Writer, yellow, "If you wish to continue, please type \"disable\":")
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+
+	rawInput, err := bufio.NewReader(cmd.Root().Reader).ReadString('\n')
+	if err != nil {
+		return err
+	}
+
+	if input := strings.ToUpper(strings.TrimSpace(rawInput)); input != "DISABLE" {
+		return errors.New("aborted")
+	}
+	return nil
+}
+
+// DisableAuthServiceAction corresponds to 'organizations auth-service disable'.
+func DisableAuthServiceAction(ctx context.Context, cmd *cli.Command, args disableAuthServiceArgs) error {
+	c, err := newViamClient(ctx, cmd)
+	if err != nil {
+		return err
+	}
+
+	return c.disableAuthServiceAction(ctx, cmd, args.OrgID)
+}
+
+func (c *viamClient) disableAuthServiceAction(ctx context.Context, cmd *cli.Command, orgID string) error {
+	if orgID == "" {
+		return errors.New("cannot disable auth service without an organization ID")
+	}
+
+	if _, err := c.client.DisableAuthService(ctx, &apppb.DisableAuthServiceRequest{OrgId: orgID}); err != nil {
+		return err
+	}
+
+	printf(cmd.Root().Writer, "disabled auth service for organization %q:\n", orgID)
+	return nil
+}
+
+type enableAuthServiceArgs struct {
+	OrgID string
+}
+
+// EnableAuthServiceAction corresponds to 'organizations auth-service enable'.
+func EnableAuthServiceAction(ctx context.Context, cmd *cli.Command, args enableAuthServiceArgs) error {
+	c, err := newViamClient(ctx, cmd)
+	if err != nil {
+		return err
+	}
+
+	orgID := args.OrgID
+	if orgID == "" {
+		return errors.New("cannot enable auth service without an organization ID")
+	}
+
+	return c.enableAuthServiceAction(ctx, cmd, args.OrgID)
+}
+
+func (c *viamClient) enableAuthServiceAction(ctx context.Context, cmd *cli.Command, orgID string) error {
+	_, err := c.client.EnableAuthService(ctx, &apppb.EnableAuthServiceRequest{OrgId: orgID})
+	if err != nil {
+		return err
+	}
+
+	printf(cmd.Root().Writer, "enabled auth service for organization %q:\n", orgID)
+	return nil
+}
+
+type updateBillingServiceArgs struct {
+	OrgID   string
+	Address string
+}
+
+// UpdateBillingServiceAction corresponds to `organizations billing-service update`.
+func UpdateBillingServiceAction(ctx context.Context, cmd *cli.Command, args updateBillingServiceArgs) error {
+	c, err := newViamClient(ctx, cmd)
+	if err != nil {
+		return err
+	}
+	orgID := args.OrgID
+	if orgID == "" {
+		return errors.New("cannot update billing service without an organization ID")
+	}
+
+	address := args.Address
+	if address == "" {
+		return errors.New("cannot update billing service to an empty address")
+	}
+
+	return c.updateBillingServiceAction(ctx, cmd, orgID, address)
+}
+
+func (c *viamClient) updateBillingServiceAction(ctx context.Context, cmd *cli.Command, orgID, addressAsString string) error {
+	address, err := parseBillingAddress(addressAsString)
+	if err != nil {
+		return err
+	}
+
+	_, err = c.client.UpdateBillingService(ctx, &apppb.UpdateBillingServiceRequest{
+		OrgId:          orgID,
+		BillingAddress: address,
+	})
+	if err != nil {
+		return err
+	}
+
+	printf(cmd.Root().Writer, "Successfully updated billing service for organization %q", orgID)
+	printf(cmd.Root().Writer, " --- Billing Address --- ")
+	printf(cmd.Root().Writer, "Address Line 1: %s", address.GetAddressLine_1())
+	if address.GetAddressLine_2() != "" {
+		printf(cmd.Root().Writer, "Address Line 2: %s", address.GetAddressLine_2())
+	}
+	printf(cmd.Root().Writer, "City: %s", address.GetCity())
+	printf(cmd.Root().Writer, "State: %s", address.GetState())
+	printf(cmd.Root().Writer, "Postal Code: %s", address.GetZipcode())
+	printf(cmd.Root().Writer, "Country: %s", address.GetCountry())
+	return nil
+}
+
+type getBillingConfigArgs struct {
+	OrgID string
+}
+
+// GetBillingConfigAction corresponds to `organizations billing get`.
+func GetBillingConfigAction(ctx context.Context, cmd *cli.Command, args getBillingConfigArgs) error {
+	if args.OrgID == "" {
+		return errors.New("must provide an organization ID to get billing config for")
+	}
+	c, err := newViamClient(ctx, cmd)
+	if err != nil {
+		return err
+	}
+	return c.getBillingConfig(ctx, cmd, args.OrgID)
+}
+
+func (c *viamClient) getBillingConfig(ctx context.Context, cmd *cli.Command, orgID string) error {
+	resp, err := c.client.GetBillingServiceConfig(ctx, &apppb.GetBillingServiceConfigRequest{
+		OrgId: orgID,
+	})
+	if err != nil {
+		return err
+	}
+
+	printf(cmd.Root().Writer, "Billing config for organization: %s", orgID)
+	printf(cmd.Root().Writer, "Support Email: %s", resp.GetSupportEmail())
+	printf(cmd.Root().Writer, "Billing Dashboard URL: %s", resp.GetBillingDashboardUrl())
+	printf(cmd.Root().Writer, "Logo URL: %s", resp.GetLogoUrl())
+	printf(cmd.Root().Writer, "")
+	printf(cmd.Root().Writer, " --- Billing Address --- ")
+	printf(cmd.Root().Writer, "Address Line 1: %s", resp.BillingAddress.GetAddressLine_1())
+	if resp.BillingAddress.GetAddressLine_2() != "" {
+		printf(cmd.Root().Writer, "Address Line 2: %s", resp.BillingAddress.GetAddressLine_2())
+	}
+	printf(cmd.Root().Writer, "City: %s", resp.BillingAddress.GetCity())
+	printf(cmd.Root().Writer, "State: %s", resp.BillingAddress.GetState())
+	printf(cmd.Root().Writer, "Postal Code: %s", resp.BillingAddress.GetZipcode())
+	if resp.BillingAddress.GetCountry() != "" {
+		printf(cmd.Root().Writer, "Country: %s", resp.BillingAddress.GetCountry())
+	}
+
+	return nil
+}
+
+type organizationEnableBillingServiceArgs struct {
+	OrgID   string
+	Address string
+}
+
+// OrganizationEnableBillingServiceAction corresponds to `organizations billing enable`.
+func OrganizationEnableBillingServiceAction(ctx context.Context, cmd *cli.Command, args organizationEnableBillingServiceArgs) error {
+	client, err := newViamClient(ctx, cmd)
+	if err != nil {
+		return err
+	}
+	orgID := args.OrgID
+	if orgID == "" {
+		return errors.New("cannot enable billing service without an organization ID")
+	}
+
+	address := args.Address
+	if address == "" {
+		return errors.New("cannot enable billing service to an empty address")
+	}
+
+	return client.organizationEnableBillingServiceAction(ctx, cmd, orgID, address)
+}
+
+func (c *viamClient) organizationEnableBillingServiceAction(ctx context.Context, cmd *cli.Command, orgID, addressAsString string) error {
+	address, err := parseBillingAddress(addressAsString)
+	if err != nil {
+		return err
+	}
+
+	_, err = c.client.EnableBillingService(ctx, &apppb.EnableBillingServiceRequest{
+		OrgId:          orgID,
+		BillingAddress: address,
+	})
+	if err != nil {
+		return err
+	}
+	printf(cmd.Root().Writer, "Successfully enabled billing service for organization %q", orgID)
+	return nil
+}
+
+type organizationDisableBillingServiceArgs struct {
+	OrgID string
+}
+
+// OrganizationDisableBillingServiceAction corresponds to `organizations billing disable`.
+func OrganizationDisableBillingServiceAction(ctx context.Context, cmd *cli.Command, args organizationDisableBillingServiceArgs) error {
+	client, err := newViamClient(ctx, cmd)
+	if err != nil {
+		return err
+	}
+	orgID := args.OrgID
+	if orgID == "" {
+		return errors.New("cannot disable billing service without an organization ID")
+	}
+	return client.organizationDisableBillingServiceAction(ctx, cmd, orgID)
+}
+
+func (c *viamClient) organizationDisableBillingServiceAction(ctx context.Context, cmd *cli.Command, orgID string) error {
+	if _, err := c.client.DisableBillingService(ctx, &apppb.DisableBillingServiceRequest{
+		OrgId: orgID,
+	}); err != nil {
+		return errors.WithMessage(err, "could not disable billing service")
+	}
+
+	printf(cmd.Root().Writer, "Successfully disabled billing service for organization: %s", orgID)
+	return nil
+}
+
+type organizationsLogoSetArgs struct {
+	OrgID    string
+	LogoPath string
+}
+
+// OrganizationLogoSetAction corresponds to `organizations logo set`.
+func OrganizationLogoSetAction(ctx context.Context, cmd *cli.Command, args organizationsLogoSetArgs) error {
+	client, err := newViamClient(ctx, cmd)
+	if err != nil {
+		return err
+	}
+
+	orgID := args.OrgID
+	if orgID == "" {
+		return errors.New("cannot set logo without an organization ID")
+	}
+	logoFilePath := args.LogoPath
+	if logoFilePath == "" {
+		return errors.New("cannot set logo to an empty URL")
+	}
+
+	return client.organizationLogoSetAction(ctx, cmd, orgID, logoFilePath)
+}
+
+func (c *viamClient) organizationLogoSetAction(ctx context.Context, cmd *cli.Command, orgID, logoFilePath string) error {
+	logoFile, err := os.Open(filepath.Clean(logoFilePath))
+	if err != nil {
+		return errors.WithMessagef(err, "could not open logo file: %s", logoFilePath)
+	}
+	defer func() {
+		if err := logoFile.Close(); err != nil {
+			warningf(cmd.Root().ErrWriter, "could not close logo file: %s", err)
+		}
+	}()
+
+	logoBytes, err := io.ReadAll(logoFile)
+	if err != nil {
+		return errors.WithMessagef(err, "could not read logo file: %s", logoFilePath)
+	}
+
+	if len(logoBytes) > logoMaxSize {
+		return errors.Errorf("logo file is too large: %d bytes (max size is 200KB)", len(logoBytes))
+	}
+
+	_, err = c.client.OrganizationSetLogo(ctx, &apppb.OrganizationSetLogoRequest{
+		OrgId: orgID,
+		Logo:  logoBytes,
+	})
+	if err != nil {
+		return err
+	}
+
+	printf(cmd.Root().Writer, "Successfully set the logo for organization %s to logo at file-path: %s",
+		orgID, logoFilePath)
+	return nil
+}
+
+type organizationsLogoGetArgs struct {
+	OrgID string
+}
+
+// OrganizationsLogoGetAction corresponds to `organizations logo get`.
+func OrganizationsLogoGetAction(ctx context.Context, cmd *cli.Command, args organizationsLogoGetArgs) error {
+	c, err := newViamClient(ctx, cmd)
+	if err != nil {
+		return err
+	}
+
+	orgID := args.OrgID
+	if orgID == "" {
+		return errors.New("cannot get logo without an organization ID")
+	}
+
+	return c.organizationsLogoGetAction(ctx, cmd, args.OrgID)
+}
+
+func (c *viamClient) organizationsLogoGetAction(ctx context.Context, cmd *cli.Command, orgID string) error {
+	resp, err := c.client.OrganizationGetLogo(ctx, &apppb.OrganizationGetLogoRequest{
+		OrgId: orgID,
+	})
+	if err != nil {
+		return err
+	}
+
+	if resp.GetUrl() == "" {
+		printf(cmd.Root().Writer, "No logo set for organization %q", orgID)
+		return nil
+	}
+
+	printf(cmd.Root().Writer, "Logo URL for organization %q: %q", orgID, resp.GetUrl())
+	return nil
+}
+
+type listOAuthAppsArgs struct {
+	OrgID string
+}
+
+// ListOAuthAppsAction corresponds to `organizations auth-service oauth-app list`.
+func ListOAuthAppsAction(ctx context.Context, cmd *cli.Command, args listOAuthAppsArgs) error {
+	c, err := newViamClient(ctx, cmd)
+	if err != nil {
+		return err
+	}
+
+	orgID := args.OrgID
+	if orgID == "" {
+		return errors.New("organization ID is required to list OAuth apps")
+	}
+
+	return c.listOAuthAppsAction(ctx, cmd, orgID)
+}
+
+func (c *viamClient) listOAuthAppsAction(ctx context.Context, cmd *cli.Command, orgID string) error {
+	resp, err := c.client.ListOAuthApps(ctx, &apppb.ListOAuthAppsRequest{
+		OrgId: orgID,
+	})
+	if err != nil {
+		return err
+	}
+
+	if len(resp.ClientIds) == 0 {
+		printf(cmd.Root().Writer, "No OAuth apps found for organization %q\n", orgID)
+		return nil
+	}
+
+	printf(cmd.Root().Writer, "OAuth apps for organization %q:\n", orgID)
+	for _, id := range resp.ClientIds {
+		printf(cmd.Root().Writer, " - %s\n", id)
+	}
+	return nil
+}
+
+type listLocationsArgs struct {
+	Organization string
+}
+
+// ListLocationsAction is the corresponding Action for 'locations list'.
+func ListLocationsAction(ctx context.Context, cmd *cli.Command, args listLocationsArgs) error {
+	client, err := newViamClient(ctx, cmd)
+	if err != nil {
+		return err
+	}
+	listLocations := func(orgID string) error {
+		locs, err := client.listLocations(ctx, orgID)
+		if err != nil {
+			return errors.Wrap(err, "could not list locations")
+		}
+		for _, loc := range locs {
+			printf(cmd.Root().Writer, "\t%s (id: %s)", loc.Name, loc.Id)
+		}
+		return nil
+	}
+	orgStr := args.Organization
+	if orgStr == "" {
+		orgStr = cmd.Args().First()
+	}
+	if orgStr == "" { // if there's still not an orgStr, then we can fall back to the alphabetically first
+		orgs, err := client.listOrganizations(ctx)
+		if err != nil {
+			return errors.Wrap(err, "could not list organizations")
+		}
+		for i, org := range orgs {
+			if i == 0 {
+				printf(cmd.Root().Writer, "Locations for %q:", client.conf.Auth)
+			}
+			printf(cmd.Root().Writer, "%s:", org.Name)
+			if err := listLocations(org.Id); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+	return listLocations(orgStr)
+}
+
+func printMachinePartStatus(cmd *cli.Command, parts []*apppb.RobotPart) {
+	for i, part := range parts {
+		name := part.Name
+		if part.MainPart {
+			name += " (main)"
+		}
+		printf(
+			cmd.Root().Writer,
+			"\tID: %s\n\tName: %s\n\tLast Access: %s (%s ago)",
+			part.Id,
+			name,
+			part.LastAccess.AsTime().Format(time.UnixDate),
+			time.Since(part.LastAccess.AsTime()),
+		)
+		if i != len(parts)-1 {
+			printf(cmd.Root().Writer, "")
+		}
+	}
+}
+
+type machinesPartListArgs struct {
+	Organization string
+	Location     string
+	Machine      string
+}
+
+// MachinesPartListAction is the corresponding Action for 'machines part list'.
+func MachinesPartListAction(ctx context.Context, cmd *cli.Command, args machinesPartListArgs) error {
+	client, err := newViamClient(ctx, cmd)
+	if err != nil {
+		return err
+	}
+
+	if err = client.ensureLoggedIn(ctx); err != nil {
+		return err
+	}
+
+	parts, err := client.robotParts(ctx, args.Organization, args.Location, args.Machine)
+	if err != nil {
+		return errors.Wrap(err, "could not get machine parts")
+	}
+
+	if len(parts) != 0 {
+		printf(cmd.Root().Writer, "Parts:")
+	}
+	printMachinePartStatus(cmd, parts)
+
+	return nil
+}
+
+type listRobotsActionArgs struct {
+	All          bool
+	Organization string
+	Location     string
+}
+
+func printOrgAndLocNames(ctx *cli.Command, orgName, locName string) {
+	printf(ctx.Root().Writer, "%s -> %s", orgName, locName)
+}
+
+func (c *viamClient) listAllRobotsInOrg(ctx context.Context, cmd *cli.Command, orgStr string) error {
+	if err := c.selectOrganization(ctx, orgStr); err != nil {
+		return err
+	}
+	locations, err := c.listLocations(ctx, c.selectedOrg.Id)
+	if err != nil {
+		return err
+	}
+
+	for _, loc := range locations {
+		if loc.RobotCount == 0 {
+			continue
+		}
+		c.selectedLoc = loc
+		// when printing all robots in an org, we always want to include org and location
+		// info to differentiate _where_ a particular robot is
+		printOrgAndLocNames(cmd, c.selectedOrg.Name, loc.Name)
+		if err = c.listLocationRobots(ctx, cmd, c.selectedOrg.Name, loc.Name); err != nil {
+			return err
+		}
+		printf(cmd.Root().Writer, "")
+	}
+
+	return nil
+}
+
+func (c *viamClient) listLocationRobots(ctx context.Context, cmd *cli.Command, orgStr, locStr string) error {
+	robots, err := c.listRobots(ctx, orgStr, locStr)
+	if err != nil {
+		return errors.Wrap(err, "could not list machines")
+	}
+
+	if orgStr == "" || locStr == "" {
+		printOrgAndLocNames(cmd, c.selectedOrg.Name, c.selectedLoc.Name)
+	}
+
+	for _, robot := range robots {
+		parts, err := c.client.GetRobotParts(ctx, &apppb.GetRobotPartsRequest{
+			RobotId: robot.Id,
+		})
+		if err != nil {
+			return err
+		}
+		mainPartID := "<unknown>"
+		for _, part := range parts.Parts {
+			if part.MainPart {
+				mainPartID = part.Id
+				break
+			}
+		}
+		printf(cmd.Root().Writer, "%s (id: %s) (main part id: %s)", robot.Name, robot.Id, mainPartID)
+	}
+	return nil
+}
+
+func (c *viamClient) lookupMachineByName(ctx context.Context, name, locStr, orgStr string) (*apppb.Robot, error) {
+	if _, err := uuid.Parse(name); err == nil { // a robot ID was passed as the name
+		req := apppb.GetRobotRequest{Id: name}
+		resp, err := c.client.GetRobot(ctx, &req)
+		if err != nil {
+			return nil, err
+		}
+		return resp.Robot, nil
+	}
+	orgs, err := c.listOrganizations(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	robots := map[string]*apppb.Robot{}
+
+	for _, org := range orgs {
+		if orgStr != "" && org.Id != orgStr && org.Name != orgStr {
+			continue
+		}
+		locs, err := c.listLocations(ctx, org.Id)
+		if err != nil {
+			return nil, err
+		}
+		for _, loc := range locs {
+			if locStr != "" && loc.Id != locStr && loc.Name != locStr {
+				continue
+			}
+			if foundRobot, err := c.robot(ctx, org.Id, loc.Id, name); err == nil {
+				robots[foundRobot.Id] = foundRobot
+			}
+		}
+	}
+	if len(robots) == 0 {
+		return nil, fmt.Errorf("unable to find robot with name %s", name)
+	} else if len(robots) != 1 {
+		return nil, fmt.Errorf("multiple robots match %s: %v", name, robots)
+	}
+
+	var robot *apppb.Robot
+	for _, bot := range robots {
+		robot = bot
+	}
+	return robot, nil
+}
+
+func (c *viamClient) lookupLocationID(ctx context.Context, locStr, orgStr string) (string, error) {
+	var err error
+	foundLocs := []*apppb.Location{}
+	orgs := []*apppb.Organization{}
+	if orgStr != "" {
+		org, err := c.getOrg(ctx, orgStr)
+		if err != nil {
+			return "", err
+		}
+		orgs = append(orgs, org)
+	} else {
+		orgs, err = c.listOrganizations(ctx)
+		if err != nil {
+			return "", err
+		}
+	}
+	for _, org := range orgs {
+		// an org has been specified and this isn't it
+		if orgStr != "" && orgStr != org.Id && orgStr != org.Name {
+			continue
+		}
+		locs, err := c.listLocations(ctx, org.Id)
+		if err != nil {
+			return "", err
+		}
+
+		for _, loc := range locs {
+			if locStr == loc.Id || locStr == loc.Name {
+				// don't add duplicates which can occur if a location is shared across a user's orgs
+				if len(foundLocs) == 0 || loc.Id != foundLocs[0].Id {
+					foundLocs = append(foundLocs, loc)
+				}
+			}
+		}
+	}
+
+	if len(foundLocs) == 0 {
+		var orgAddenda string
+		if orgStr != "" {
+			orgAddenda = fmt.Sprintf(" in organization %q", orgStr)
+		}
+		return "", errors.Errorf("no location found for %q%q", locStr, orgAddenda)
+	}
+	if len(foundLocs) != 1 {
+		return "", errors.Errorf("multiple locations match %q: %v", locStr, foundLocs)
+	}
+
+	return foundLocs[0].Id, nil
+}
+
+type createMachineActionArgs struct {
+	Name         string
+	Location     string
+	Organization string
+}
+
+// CreateMachineAction is the corresponding action for 'machines create'.
+func CreateMachineAction(ctx context.Context, cmd *cli.Command, args createMachineActionArgs) error {
+	if args.Location == "" {
+		return errors.New("must provide a location to create a machine in")
+	}
+	client, err := newViamClient(ctx, cmd)
+	if err != nil {
+		return err
+	}
+
+	locID, err := client.lookupLocationID(ctx, args.Location, args.Organization)
+	if err != nil {
+		return err
+	}
+
+	req := apppb.NewRobotRequest{Name: args.Name, Location: locID}
+
+	resp, err := client.client.NewRobot(ctx, &req)
+	if err != nil {
+		return err
+	}
+	printf(cmd.Root().Writer, "created new machine with id %s", resp.Id)
+	return nil
+}
+
+type deleteMachineActionArgs struct {
+	Machine      string
+	Location     string
+	Organization string
+}
+
+// DeleteMachineAction is the corresponding action for 'machines delete'.
+func DeleteMachineAction(ctx context.Context, cmd *cli.Command, args deleteMachineActionArgs) error {
+	client, err := newViamClient(ctx, cmd)
+	if err != nil {
+		return err
+	}
+
+	robot, err := client.lookupMachineByName(ctx, args.Machine, args.Location, args.Organization)
+	robotID := robot.Id
+	if err != nil {
+		return err
+	}
+
+	req := apppb.DeleteRobotRequest{Id: robotID}
+	if _, err = client.client.DeleteRobot(ctx, &req); err != nil {
+		return err
+	}
+
+	printf(cmd.Root().Writer, "deleted machine %s", args.Machine)
+	return nil
+}
+
+type updateMachineActionArgs struct {
+	Machine      string
+	NewName      string
+	NewLocation  string
+	Location     string
+	Organization string
+}
+
+// UpdateMachineAction is the corresponding action for 'machines move'.
+func UpdateMachineAction(ctx context.Context, cmd *cli.Command, args updateMachineActionArgs) error {
+	if args.NewName == "" && args.Location == "" {
+		return errors.New("must pass a new name or new location to update the machine")
+	}
+	client, err := newViamClient(ctx, cmd)
+	if err != nil {
+		return err
+	}
+	robot, err := client.lookupMachineByName(ctx, args.Machine, args.Location, args.Organization)
+	if err != nil {
+		return err
+	}
+
+	id := robot.Id
+	locStr := robot.GetLocation()
+	currLocation, err := client.client.GetLocation(ctx, &apppb.GetLocationRequest{LocationId: locStr})
+	if err != nil {
+		return err
+	}
+
+	var orgID string
+	for _, org := range currLocation.GetLocation().GetOrganizations() {
+		if org.Primary {
+			orgID = org.OrganizationId
+			break
+		}
+	}
+
+	newLocID, err := client.lookupLocationID(ctx, args.NewLocation, orgID)
+	if err != nil {
+		return err
+	}
+
+	req := apppb.UpdateRobotRequest{Id: id, Location: newLocID, Name: args.NewName}
+
+	if _, err = client.client.UpdateRobot(ctx, &req); err != nil {
+		return err
+	}
+
+	printf(cmd.Root().Writer, "updated machine %s", args.Machine)
+	return nil
+}
+
+// ListRobotsAction is the corresponding Action for 'machines list'.
+func ListRobotsAction(ctx context.Context, cmd *cli.Command, args listRobotsActionArgs) error {
+	client, err := newViamClient(ctx, cmd)
+	if err != nil {
+		return err
+	}
+	orgStr := args.Organization
+	locStr := args.Location
+	if args.All {
+		return client.listAllRobotsInOrg(ctx, cmd, orgStr)
+	}
+	return client.listLocationRobots(ctx, cmd, orgStr, locStr)
+}
+
+type robotsStatusArgs struct {
+	Organization string
+	Location     string
+	Machine      string
+}
+
+func (c *viamClient) getOrgAndLocationNamesForRobot(ctx context.Context, robot *apppb.Robot) (string, string, error) {
+	orgs, err := c.client.GetOrganizationsWithAccessToLocation(
+		ctx, &apppb.GetOrganizationsWithAccessToLocationRequest{LocationId: robot.Location},
+	)
+	if err != nil {
+		return "", "", err
+	}
+	if len(orgs.OrganizationIdentities) == 0 {
+		return "", "", errors.Errorf("no parent org found for robot: %s", robot.Id)
+	}
+	org := orgs.OrganizationIdentities[0]
+
+	location, err := c.client.GetLocation(ctx, &apppb.GetLocationRequest{LocationId: robot.Location})
+	if err != nil {
+		return "", "", err
+	}
+
+	return org.Name, location.Location.Name, nil
+}
+
+// RobotsStatusAction is the corresponding Action for 'machines status'.
+func RobotsStatusAction(ctx context.Context, cmd *cli.Command, args robotsStatusArgs) error {
+	client, err := newViamClient(ctx, cmd)
+	if err != nil {
+		return err
+	}
+
+	orgStr := args.Organization
+	locStr := args.Location
+	robot, err := client.robot(ctx, orgStr, locStr, args.Machine)
+	if err != nil {
+		return err
+	}
+	parts, err := client.robotParts(ctx, client.selectedOrg.Id, client.selectedLoc.Id, robot.Id)
+	if err != nil {
+		return errors.Wrap(err, "could not get machine parts")
+	}
+
+	if orgStr == "" || locStr == "" {
+		orgName, locName, err := client.getOrgAndLocationNamesForRobot(ctx, robot)
+		if err != nil {
+			return err
+		}
+		printOrgAndLocNames(cmd, orgName, locName)
+	}
+
+	printf(
+		cmd.Root().Writer,
+		"ID: %s\nName: %s\nLast Access: %s (%s ago)",
+		robot.Id,
+		robot.Name,
+		robot.LastAccess.AsTime().Format(time.UnixDate),
+		time.Since(robot.LastAccess.AsTime()),
+	)
+
+	if len(parts) != 0 {
+		printf(cmd.Root().Writer, "Parts:")
+	}
+
+	printMachinePartStatus(cmd, parts)
+
+	return nil
+}
+
+func getNumLogs(cmd *cli.Command, numLogs int) (int, error) {
+	if numLogs < 0 {
+		warningf(cmd.Root().ErrWriter, "Provided negative %q value. Defaulting to %d", generalFlagCount, defaultNumLogs)
+		return defaultNumLogs, nil
+	}
+	if numLogs == 0 {
+		return defaultNumLogs, nil
+	}
+	if numLogs > maxNumLogs {
+		return 0, errors.Errorf("provided too high of a %q value. Maximum is %d", generalFlagCount, maxNumLogs)
+	}
+	return numLogs, nil
+}
+
+type robotsLogsArgs struct {
+	Organization string
+	Location     string
+	Machine      string
+	Output       string
+	Format       string
+	Keyword      string
+	Levels       []string
+	Start        string
+	End          string
+	Count        int
+}
+
+// RobotsLogsAction is the corresponding Action for 'machines logs'.
+func RobotsLogsAction(ctx context.Context, cmd *cli.Command, args robotsLogsArgs) error {
+	client, err := newViamClient(ctx, cmd)
+	if err != nil {
+		return err
+	}
+
+	// Check if both start time and count are provided
+	// TODO: [APP-7415] Enhance LogsForPart API to Support Sorting Options for Log Display Order
+	// TODO: [APP-7450] Implement "Start Time with Count without End Time" Functionality in LogsForPart
+	if args.Start != "" && args.Count > 0 && args.End == "" {
+		return errors.New("unsupported functionality: specifying both a start time and a count without an end time is not supported. " +
+			"This behavior can be counterintuitive because logs are currently only sorted in descending order. " +
+			"For example, if there are 200 logs after the specified start time and you request 10 logs, it will return the 10 most recent logs, " +
+			"rather than the 10 logs closest to the start time. " +
+			"Please provide either a start time and an end time to define a clear range, or a count without a start time for recent logs",
+		)
+	}
+
+	orgStr := args.Organization
+	locStr := args.Location
+	robotStr := args.Machine
+	robot, err := client.robot(ctx, orgStr, locStr, robotStr)
+	if err != nil {
+		return errors.Wrap(err, "could not get machine")
+	}
+
+	// TODO(RSDK-9727) - this is a little inefficient insofar as a `robot` is created immediately
+	// above and then also again within this `robotParts` call. Might be nice to have a helper
+	// API for getting parts when we already have a `Robot`
+	parts, err := client.robotParts(ctx, orgStr, locStr, robotStr)
+	if err != nil {
+		return errors.Wrap(err, "could not get machine parts")
+	}
+
+	// Determine the output destination
+	var writer io.Writer
+	if args.Output != "" {
+		file, err := os.OpenFile(args.Output, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600)
+		if err != nil {
+			return errors.Wrap(err, "could not open file for writing")
+		}
+		//nolint:errcheck
+		defer file.Close()
+		writer = file
+	} else {
+		// Output to console
+		writer = cmd.Root().Writer
+	}
+
+	return client.fetchAndSaveLogs(ctx, robot, parts, args, writer)
+}
+
+// fetchLogs fetches logs for all parts and writes them to the provided writer.
+func (c *viamClient) fetchAndSaveLogs(
+	ctx context.Context, robot *apppb.Robot, parts []*apppb.RobotPart, args robotsLogsArgs, writer io.Writer,
+) error {
+	for i, part := range parts {
+		// Write a header for text format
+		if args.Format == "text" || args.Format == "" {
+			// Add robot information as a header for context
+			if i == 0 {
+				header := fmt.Sprintf("Robot: %s -> Location: %s -> Organization: %s -> Machine: %s\n",
+					robot.Name, args.Location, args.Organization, args.Machine)
+				if _, err := fmt.Fprintln(writer, header); err != nil {
+					return errors.Wrap(err, "failed to write robot header")
+				}
+			}
+
+			if _, err := fmt.Fprintf(writer, "===== Logs for Part: %s =====\n", part.Name); err != nil {
+				return errors.Wrap(err, "failed to write header to writer")
+			}
+		}
+
+		// Stream logs for the part
+		if err := c.streamLogsForPart(ctx, part, args, writer); err != nil {
+			return errors.Wrapf(err, "could not stream logs for part %s", part.Name)
+		}
+	}
+	return nil
+}
+
+// streamLogsForPart streams logs for a specific part directly to a file.
+func (c *viamClient) streamLogsForPart(ctx context.Context, part *apppb.RobotPart, args robotsLogsArgs, writer io.Writer) error {
+	maxLogsToFetch, err := getNumLogs(c.c, args.Count)
+	if err != nil {
+		return err
+	}
+
+	if args.Start == "" {
+		args.Start = time.Now().Add(defaultLogStartTime).UTC().Format(time.RFC3339)
+	}
+
+	startTime, err := parseTimeString(args.Start)
+	if err != nil {
+		return errors.Wrap(err, "invalid start time format")
+	}
+	endTime, err := parseTimeString(args.End)
+	if err != nil {
+		return errors.Wrap(err, "invalid end time format")
+	}
+
+	keyword := &args.Keyword
+
+	// Tracks the token for the next page of logs to fetch, allowing pagination through log results.
+	var pageToken string
+
+	// Fetch logs in batches and write them to the output.
+	for fetchedLogCount := 0; fetchedLogCount < maxLogsToFetch; {
+		// We do not request the exact limit specified by the user in the `count` argument because the API enforces a maximum
+		// limit of 100 logs per batch fetch. To keep the RDK independent of specific limits imposed by the app API,
+		// we always request the next full batch of logs as allowed by the API (currently 100). This approach
+		// ensures that if the API limit changes in the future, only the app API logic needs to be updated without requiring
+		// changes in the RDK.
+		resp, err := c.client.GetRobotPartLogs(ctx, &apppb.GetRobotPartLogsRequest{
+			Id:        part.Id,
+			Filter:    keyword,
+			PageToken: &pageToken,
+			Levels:    args.Levels,
+			Start:     startTime,
+			End:       endTime,
+		})
+		if err != nil {
+			return errors.Wrap(err, "failed to fetch logs")
+		}
+
+		// End of pagination if no logs are returned.
+		if len(resp.Logs) == 0 {
+			break
+		}
+
+		// The API may return more logs than the user requested via the `count` argument.
+		// This is because the API uses pagination internally and fetches logs in batches.
+		// To ensure we do not append more logs than the user requested, we calculate the
+		// `remainingLogsNeeded` by subtracting the logs we have already fetched (`logsFetched`)
+		// from the total number of logs the user asked for (`numLogs`).
+		// If the current batch contains more logs than the remaining needed, we truncate the
+		// batch to include only the necessary number of logs.
+		// This ensures the output strictly adheres to the `count` limit specified by the user.
+		remainingLogsNeeded := maxLogsToFetch - fetchedLogCount
+		if remainingLogsNeeded < len(resp.Logs) {
+			resp.Logs = resp.Logs[:remainingLogsNeeded]
+		}
+
+		for _, log := range resp.Logs {
+			formattedLog, err := formatLog(log, part.Name, args.Format)
+			if err != nil {
+				return errors.Wrap(err, "failed to format log")
+			}
+
+			if _, err := fmt.Fprintln(writer, formattedLog); err != nil {
+				return errors.Wrap(err, "failed to write log to writer")
+			}
+		}
+
+		fetchedLogCount += len(resp.Logs)
+
+		// End of pagination if there is no next page token.
+		if pageToken = resp.NextPageToken; pageToken == "" {
+			break
+		}
+	}
+
+	return nil
+}
+
+// formatLog formats a single log entry based on the specified format.
+func formatLog(log *commonpb.LogEntry, partName, format string) (string, error) {
+	fieldsString, err := logEntryFieldsToString(log.Fields)
+	if err != nil {
+		fieldsString = fmt.Sprintf("error formatting fields: %v", err)
+	}
+
+	switch format {
+	case "json":
+		logMap := map[string]interface{}{
+			"part":    partName,
+			"ts":      log.Time.AsTime().Unix(),
+			"time":    log.Time.AsTime().Format(logging.DefaultTimeFormatStr),
+			"message": log.Message,
+			"level":   log.Level,
+			"logger":  log.LoggerName,
+			"fields":  fieldsString,
+		}
+		logJSON, err := json.Marshal(logMap)
+		if err != nil {
+			return "", errors.Wrap(err, "failed to marshal log to JSON")
+		}
+		return string(logJSON), nil
+	case "text", "":
+		return fmt.Sprintf(
+			"%s\t%s\t%s\t%s\t%s",
+			log.Time.AsTime().Format(logging.DefaultTimeFormatStr),
+			log.Level,
+			log.LoggerName,
+			log.Message,
+			fieldsString,
+		), nil
+	default:
+		return "", fmt.Errorf("invalid format: %s", format)
+	}
+}
+
+type machinesPartCreateArgs struct {
+	PartName     string
+	Machine      string
+	Location     string
+	Organization string
+}
+
+func machinesPartCreateAction(ctx context.Context, cmd *cli.Command, args machinesPartCreateArgs) error {
+	client, err := newViamClient(ctx, cmd)
+	if err != nil {
+		return err
+	}
+
+	robot, err := client.lookupMachineByName(ctx, args.Machine, args.Location, args.Organization)
+	if err != nil {
+		return err
+	}
+
+	req := apppb.NewRobotPartRequest{PartName: args.PartName, RobotId: robot.Id}
+
+	resp, err := client.client.NewRobotPart(ctx, &req)
+	if err != nil {
+		return err
+	}
+
+	printf(cmd.Root().Writer, "created new machine part with ID %s", resp.PartId)
+	return nil
+}
+
+type machinesPartDeleteArgs struct {
+	Part         string
+	Machine      string
+	Location     string
+	Organization string
+}
+
+func machinesPartDeleteAction(ctx context.Context, cmd *cli.Command, args machinesPartDeleteArgs) error {
+	client, err := newViamClient(ctx, cmd)
+	if err != nil {
+		return err
+	}
+
+	part, err := client.robotPart(ctx, args.Organization, args.Location, args.Machine, args.Part)
+	if err != nil {
+		return err
+	}
+
+	req := apppb.DeleteRobotPartRequest{PartId: part.Id}
+
+	_, err = client.client.DeleteRobotPart(ctx, &req)
+	if err != nil {
+		return err
+	}
+
+	printf(cmd.Root().Writer, "successfully deleted part %s (ID: %s)", part.Name, part.Id)
+	return nil
+}
+
+func resourcesFromPartConfig(config map[string]any, resourceTypePlural string) ([]map[string]any, error) {
+	var resources []any
+	for k, v := range config {
+		if k != resourceTypePlural {
+			continue
+		}
+		r, ok := v.([]any)
+		if !ok {
+			return nil, fmt.Errorf("config %s were improperly formatted", resourceTypePlural)
+		}
+
+		resources = r
+		break
+	}
+
+	var typedResources []map[string]any
+
+	for _, r := range resources {
+		resource, ok := r.(map[string]any)
+		if !ok {
+			return nil, fmt.Errorf("%s config was improperly formatted", resourceTypePlural)
+		}
+		typedResources = append(typedResources, resource)
+	}
+
+	return typedResources, nil
+}
+
+func resourceMap(cmd *cli.Command) map[string]string {
+	resources := map[string]string{}
+
+	for _, resource := range modulegen.Resources {
+		r := strings.Split(resource, " ")
+		if len(r) != 2 {
+			printf(cmd.Root().ErrWriter, "warning: resource type %s not properly formatted.", resource)
+			continue
+		}
+		resources[r[0]] = r[1]
+	}
+
+	return resources
+}
+
+type robotsPartAddResourceArgs struct {
+	Part            string
+	Machine         string
+	Location        string
+	Organization    string
+	ModelName       string
+	Name            string
+	ResourceSubtype string
+	API             string
+}
+
+func robotsPartAddResourceAction(ctx context.Context, cmd *cli.Command, args robotsPartAddResourceArgs) error {
+	if args.API == "" && args.ResourceSubtype == "" {
+		return errors.New("cannot add a resource of unknown subtype; a subtype or fully qualified API triplet must be specified")
+	}
+	client, err := newViamClient(ctx, cmd)
+	if err != nil {
+		return err
+	}
+	part, err := client.robotPart(ctx, args.Organization, args.Location, args.Machine, args.Part)
+	if err != nil {
+		return err
+	}
+
+	config := part.RobotConfig.AsMap()
+
+	var resourceType string
+	var api string
+	if args.API != "" && len(strings.Split(args.API, ":")) == 3 {
+		api = args.API
+		resourceType = strings.Split(args.API, ":")[1]
+	} else {
+		if args.API != "" {
+			warningf(
+				cmd.Root().ErrWriter, "the provided API '%s' is improperly formatted; attempting to infer API from the provided resource subtype %s",
+				args.API, args.ResourceSubtype,
+			)
+		}
+
+		subtype := strings.ReplaceAll(args.ResourceSubtype, "-", "_")
+		subtype = strings.ReplaceAll(subtype, " ", "_")
+		subtype = strings.ToLower(subtype)
+
+		resourceMap := resourceMap(cmd)
+		resourceType = resourceMap[subtype]
+		if resourceType == "" {
+			return fmt.Errorf(
+				"resource subtype %s is unknown; if you're trying to add a custom resource type then a fully qualified API is necessary",
+				subtype,
+			)
+		}
+		api = fmt.Sprintf("rdk:%s:%s", resourceType, subtype)
+	}
+
+	// for a custom resource subtype, a user might not follow the format of namespace:type:subtype
+	if resourceType != "component" && resourceType != "service" { //nolint:goconst
+		warningf(cmd.Root().ErrWriter, "unknown resource type '%s'. Resource type should be 'component' or 'service'; defaulting to component",
+			resourceType,
+		)
+		resourceType = "component"
+	}
+
+	resourceTypePlural := resourceType + "s"
+	resources, err := resourcesFromPartConfig(config, resourceTypePlural)
+	if err != nil {
+		return err
+	}
+
+	// ensure no component already exists with the given name
+	for _, c := range resources {
+		if c["name"] == args.Name {
+			return fmt.Errorf("%s with name %s already exists", resourceType, args.Name)
+		}
+	}
+
+	newResource := map[string]any{
+		"name":  args.Name,
+		"model": args.ModelName,
+		"api":   api,
+	}
+	resources = append(resources, newResource)
+	config[resourceTypePlural] = resources
+
+	pbConfig, err := protoutils.StructToStructPb(config)
+	if err != nil {
+		return err
+	}
+
+	req := apppb.UpdateRobotPartRequest{Id: part.Id, Name: part.Name, RobotConfig: pbConfig}
+	_, err = client.client.UpdateRobotPart(ctx, &req)
+	if err != nil {
+		return err
+	}
+
+	printf(cmd.Root().Writer, "successfully added resource %s to part %s", args.Name, args.Part)
+	return nil
+}
+
+type robotsPartRemoveResourceArgs struct {
+	Part         string
+	Machine      string
+	Location     string
+	Organization string
+	Name         string
+}
+
+func robotsPartRemoveResourceAction(ctx context.Context, cmd *cli.Command, args robotsPartRemoveResourceArgs) error {
+	client, err := newViamClient(ctx, cmd)
+	if err != nil {
+		return err
+	}
+
+	part, err := client.robotPart(ctx, args.Organization, args.Location, args.Machine, args.Part)
+	if err != nil {
+		return err
+	}
+
+	config := part.RobotConfig.AsMap()
+	resourceFound := false
+	for _, resourceType := range []string{"components", "services"} {
+		resources, err := resourcesFromPartConfig(config, resourceType)
+		if err != nil {
+			return err
+		}
+		var updatedResources []map[string]any
+		for _, c := range resources {
+			if c["name"] != args.Name {
+				updatedResources = append(updatedResources, c)
+			} else {
+				resourceFound = true
+			}
+		}
+		config[resourceType] = updatedResources
+	}
+
+	if !resourceFound {
+		printf(cmd.Root().Writer, "resource %s not found on part %s", args.Name, args.Part)
+		return nil
+	}
+
+	pbConfig, err := protoutils.StructToStructPb(config)
+	if err != nil {
+		return err
+	}
+
+	req := apppb.UpdateRobotPartRequest{Id: part.Id, Name: part.Name, RobotConfig: pbConfig}
+	_, err = client.client.UpdateRobotPart(ctx, &req)
+	if err != nil {
+		return err
+	}
+
+	printf(cmd.Root().Writer, "successfully removed resource %s from part %s", args.Name, args.Part)
+	return nil
+}
+
+// parseJSONOrFile tries json.Unmarshal first; if that fails and s is a file path, reads and parses it.
+func parseJSONOrFile(s string) (map[string]any, error) {
+	var result map[string]any
+	jsonErr := json.Unmarshal([]byte(s), &result)
+	if jsonErr == nil {
+		return result, nil
+	}
+	data, err := os.ReadFile(s) //nolint:gosec // s is a user-provided path for a JSON file
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse as JSON (%w) and failed to read file %q: %w", jsonErr, s, err)
+	}
+	if err := json.Unmarshal(data, &result); err != nil {
+		return nil, fmt.Errorf("failed to parse JSON from file %q: %w", s, err)
+	}
+	return result, nil
+}
+
+type resourceEnableDisableArgs struct {
+	Part         string
+	Machine      string
+	Location     string
+	Organization string
+	ResourceName []string
+}
+
+func resourceEnableAction(ctx context.Context, cmd *cli.Command, args resourceEnableDisableArgs) error {
+	return resourceEnableDisable(ctx, cmd, args, false)
+}
+
+func resourceDisableAction(ctx context.Context, cmd *cli.Command, args resourceEnableDisableArgs) error {
+	return resourceEnableDisable(ctx, cmd, args, true)
+}
+
+func resourceEnableDisable(ctx context.Context, cmd *cli.Command, args resourceEnableDisableArgs, disable bool) error {
+	client, err := newViamClient(ctx, cmd)
+	if err != nil {
+		return err
+	}
+
+	for _, name := range args.ResourceName {
+		if strings.TrimSpace(name) == "" {
+			return errors.New("--resource value must not be empty")
+		}
+	}
+
+	// warn on duplicate resources and create a set of unique ones
+	uniqueResources := make(map[string]bool)
+	for _, name := range args.ResourceName {
+		if uniqueResources[name] {
+			warningf(cmd.Root().Writer, "duplicate resource %q ignored\n", name)
+			continue
+		}
+		uniqueResources[name] = true
+	}
+
+	part, err := client.robotPart(ctx, args.Organization, args.Location, args.Machine, args.Part)
+	if err != nil {
+		return err
+	}
+
+	config := part.RobotConfig.AsMap()
+	var updatedResources []string
+	for _, resourceType := range []string{"components", "services", "modules"} {
+		resources, err := resourcesFromPartConfig(config, resourceType)
+		if err != nil {
+			return err
+		}
+		for _, resource := range resources {
+			name, ok := resource["name"].(string)
+			if !ok || !uniqueResources[name] {
+				continue
+			}
+			if disable {
+				resource["disabled"] = true
+			} else {
+				delete(resource, "disabled")
+			}
+			updatedResources = append(updatedResources, name)
+			delete(uniqueResources, name)
+		}
+		config[resourceType] = resources
+	}
+	for name := range uniqueResources {
+		warningf(cmd.Root().Writer, "resource %q not found in part config\n", name)
+	}
+
+	if len(updatedResources) == 0 {
+		return errors.New("no matching resources found in part config")
+	}
+
+	pbConfig, err := protoutils.StructToStructPb(config)
+	if err != nil {
+		return err
+	}
+
+	req := apppb.UpdateRobotPartRequest{Id: part.Id, Name: part.Name, RobotConfig: pbConfig}
+	_, err = client.client.UpdateRobotPart(ctx, &req)
+	if err != nil {
+		return err
+	}
+
+	action := "enabled"
+	if disable {
+		action = "disabled"
+	}
+	printf(cmd.Root().Writer, "successfully %s resource(s): %s", action, strings.Join(updatedResources, ", "))
+	return nil
+}
+
+type machinesPartUpdateResourceArgs struct {
+	Part         string
+	Machine      string
+	Location     string
+	Organization string
+	ResourceName string
+	Config       string
+}
+
+func machinesPartUpdateResourceAction(ctx context.Context, cmd *cli.Command, args machinesPartUpdateResourceArgs) error {
+	updates, err := parseJSONOrFile(args.Config)
+	if err != nil {
+		return err
+	}
+
+	client, err := newViamClient(ctx, cmd)
+	if err != nil {
+		return err
+	}
+
+	part, err := client.robotPart(ctx, args.Organization, args.Location, args.Machine, args.Part)
+	if err != nil {
+		return err
+	}
+
+	config := part.RobotConfig.AsMap()
+	resourceFound := false
+	for _, resourceType := range []string{"components", "services"} {
+		resources, err := resourcesFromPartConfig(config, resourceType)
+		if err != nil {
+			return err
+		}
+		for _, resource := range resources {
+			if resource["name"] == args.ResourceName {
+				resourceFound = true
+				if rutils.IsEmptyJSONValue(updates) {
+					delete(resource, "attributes")
+					infof(cmd.Root().Writer, "empty JSON detected, deleting attributes from resource %q...", args.ResourceName)
+				} else {
+					resource["attributes"] = updates
+				}
+				break
+			}
+		}
+		config[resourceType] = resources
+	}
+
+	if !resourceFound {
+		return fmt.Errorf("resource %q not found in part config", args.ResourceName)
+	}
+
+	pbConfig, err := protoutils.StructToStructPb(config)
+	if err != nil {
+		return err
+	}
+
+	req := apppb.UpdateRobotPartRequest{Id: part.Id, Name: part.Name, RobotConfig: pbConfig}
+	_, err = client.client.UpdateRobotPart(ctx, &req)
+	if err != nil {
+		return err
+	}
+
+	printf(cmd.Root().Writer, "Successfully updated resource %q", args.ResourceName)
+	return nil
+}
+
+// Trigger event type constants.
+const (
+	triggerEventPartOnline              = "part_online"
+	triggerEventPartOffline             = "part_offline"
+	triggerEventPartDataSynced          = "part_data_ingested"
+	triggerEventConditionalDataIngested = "conditional_data_ingested"
+	triggerEventConditionalLogsIngested = "conditional_logs_ingested"
+)
+
+// Notification type constants.
+const (
+	notifTypeEmail   = "email"
+	notifTypeWebhook = "webhook"
+)
+
+type machinesPartAddTriggerArgs struct {
+	Part         string
+	Machine      string
+	Location     string
+	Organization string
+	Config       string
+}
+
+type machinesPartDeleteTriggerArgs struct {
+	Part         string
+	Machine      string
+	Location     string
+	Organization string
+	Name         string
+}
+
+func machinesPartAddTriggerAction(ctx context.Context, cmd *cli.Command, args machinesPartAddTriggerArgs) error {
+	client, err := newViamClient(ctx, cmd)
+	if err != nil {
+		return err
+	}
+
+	var triggerConfig map[string]any
+	var part *apppb.RobotPart
+
+	// If no config provided, run the interactive huh flow.
+	if args.Config != "" {
+		// Non-interactive path: config and part are required flags.
+		triggerConfig, err = parseJSONOrFile(args.Config)
+		if err != nil {
+			return err
+		}
+
+		partStr := strings.TrimSpace(args.Part)
+		if partStr == "" {
+			return errors.New("part is required when using --config; specify --part")
+		}
+		part, err = client.robotPart(ctx, args.Organization, args.Location, args.Machine, partStr)
+		if err != nil {
+			return err
+		}
+	} else {
+		// Get part ID
+		part, err = client.robotPart(ctx, args.Organization, args.Location, args.Machine, args.Part)
+		if err != nil {
+			return err
+		}
+
+		triggerConfig, err = collectTriggerForm(part)
+		if err != nil {
+			return err
+		}
+	}
+
+	config := part.RobotConfig.AsMap()
+
+	if err := validateTriggerConfig(cmd.Root().ErrWriter, config, triggerConfig); err != nil {
+		return err
+	}
+
+	name, _ := triggerConfig["name"].(string)
+
+	if err := combineTriggers(config, triggerConfig, name); err != nil {
+		return err
+	}
+
+	if err := client.updateRobotPart(ctx, part, config, nil); err != nil {
+		return err
+	}
+
+	printf(cmd.Root().Writer, "successfully added trigger %q to part %s", name, part.Name)
+	return nil
+}
+
+// collectTriggerForm runs the interactive form to build a trigger config.
+func collectTriggerForm(part *apppb.RobotPart) (map[string]any, error) {
+	var triggerName, eventType string
+	form := huh.NewForm(huh.NewGroup(
+		huh.NewNote().Title("Add a trigger to a part"),
+		huh.NewInput().Title("Set a trigger name:").Value(&triggerName).
+			Validate(func(s string) error {
+				if strings.TrimSpace(s) == "" {
+					return errors.New("trigger name cannot be empty")
+				}
+				return nil
+			}),
+		huh.NewSelect[string]().Title("Select an event type:").
+			Options(
+				huh.NewOption("Part is online", triggerEventPartOnline),
+				huh.NewOption("Part is offline", triggerEventPartOffline),
+				huh.NewOption("Data has been synced to the cloud", triggerEventPartDataSynced),
+				huh.NewOption("Conditional data ingestion", triggerEventConditionalDataIngested),
+				huh.NewOption("Conditional logs ingestion", triggerEventConditionalLogsIngested),
+			).
+			Value(&eventType),
+	))
+	if err := form.Run(); err != nil {
+		return nil, err
+	}
+
+	event := map[string]any{"type": eventType}
+	switch eventType {
+	case triggerEventPartDataSynced:
+		var dataTypes []string
+		if err := huh.NewForm(huh.NewGroup(
+			huh.NewMultiSelect[string]().Title("Select data types:").
+				Options(
+					huh.NewOption("Unspecified", "unspecified"),
+					huh.NewOption("Binary(image)", "binary"),
+					huh.NewOption("Tabular(sensor)", "tabular"),
+					huh.NewOption("File", "file"),
+				).
+				Value(&dataTypes).
+				Validate(func(s []string) error {
+					if len(s) == 0 {
+						return errors.New("select at least one data type")
+					}
+					return nil
+				}),
+		)).Run(); err != nil {
+			return nil, err
+		}
+		event["data_ingested"] = map[string]any{"data_types": toAnySlice(dataTypes)}
+
+	case triggerEventConditionalDataIngested:
+		conditionalEvent, err := collectConditionalDataIngested(part)
+		if err != nil {
+			return nil, err
+		}
+		event["conditional"] = conditionalEvent
+
+	case triggerEventConditionalLogsIngested:
+		var logLevels []string
+		if err := huh.NewForm(huh.NewGroup(
+			huh.NewMultiSelect[string]().Title("Select log levels:").
+				Options(
+					huh.NewOption("Info", "info"),
+					huh.NewOption("Warn", "warn"),
+					huh.NewOption("Error", "error"),
+				).
+				Value(&logLevels).
+				Validate(func(s []string) error {
+					if len(s) == 0 {
+						return errors.New("select at least one log level")
+					}
+					return nil
+				}),
+		)).Run(); err != nil {
+			return nil, err
+		}
+		event["log_levels"] = toAnySlice(logLevels)
+	}
+
+	notifications, err := collectNotifications(eventType)
+	if err != nil {
+		return nil, err
+	}
+
+	return map[string]any{
+		"name": triggerName, "event": event, "notifications": notifications,
+	}, nil
+}
+
+// combineTriggers combines new triggers with the existing trigger config, erroring for repeat triggers.
+func combineTriggers(config, triggerConfig map[string]any, name string) error {
+	// Use []any (not []map[string]any) so structpb.NewStruct can serialize it.
+	var triggers []any
+	if existing, ok := config["triggers"]; ok {
+		if arr, ok := existing.([]any); ok {
+			triggers = arr
+		}
+	}
+	for _, t := range triggers {
+		if tMap, ok := t.(map[string]any); ok {
+			if tMap["name"] == name {
+				return fmt.Errorf("trigger with name %q already exists", name)
+			}
+		}
+	}
+	triggers = append(triggers, triggerConfig)
+	config["triggers"] = triggers
+	return nil
+}
+
+// collectConditionalDataIngested prompts for resource, method, operator, and value
+// to build the "conditional" portion of a conditional_data_ingested trigger event.
+func collectConditionalDataIngested(part *apppb.RobotPart) (map[string]any, error) {
+	// Build resource options and subtype map from the part config (components only).
+	confMap := part.RobotConfig.AsMap()
+	var resourceOpts []huh.Option[string]
+	subtypeByName := make(map[string]string)
+	resources, err := resourcesFromPartConfig(confMap, "components")
+	if err != nil {
+		return nil, err
+	}
+	for _, r := range resources {
+		n, _ := r["name"].(string)
+		if n == "" {
+			continue
+		}
+		resourceOpts = append(resourceOpts, huh.NewOption(n, n))
+		api, _ := r["api"].(string)
+		parts := strings.Split(api, ":")
+		if len(parts) == 3 && parts[2] != "" {
+			subtypeByName[n] = parts[2]
+		}
+	}
+	if len(resourceOpts) == 0 {
+		return nil, errors.New("this machine contains no components")
+	}
+	// Select a resource.
+	var resourceName string
+	if err := huh.NewForm(huh.NewGroup(
+		huh.NewSelect[string]().Title("Select a resource:").
+			Options(resourceOpts...).Value(&resourceName),
+	)).Run(); err != nil {
+		return nil, err
+	}
+
+	subtype, ok := subtypeByName[resourceName]
+	if !ok {
+		return nil, fmt.Errorf("could not determine subtype for resource %q", resourceName)
+	}
+
+	// Select a data capture method.
+	var method string
+	if methods, ok := validDataCaptureMethods[subtype]; ok {
+		methodOpts := make([]huh.Option[string], 0, len(methods))
+		for _, m := range methods {
+			methodOpts = append(methodOpts, huh.NewOption(m, m))
+		}
+		if err := huh.NewForm(huh.NewGroup(
+			huh.NewSelect[string]().Title("Select a data capture method:").
+				Options(methodOpts...).Value(&method),
+		)).Run(); err != nil {
+			return nil, err
+		}
+	} else {
+		if err := huh.NewForm(huh.NewGroup(
+			huh.NewInput().Title("Data capture method:").
+				Description("e.g., Readings, ReadImage").
+				Value(&method).
+				Validate(func(s string) error {
+					if strings.TrimSpace(s) == "" {
+						return errors.New("method cannot be empty")
+					}
+					return nil
+				}),
+		)).Run(); err != nil {
+			return nil, err
+		}
+	}
+
+	dcm := subtype + ":" + resourceName + ":" + method
+
+	// 3. Key, operator, and value.
+	var conditionKey, operator, conditionValue string
+	if err := huh.NewForm(huh.NewGroup(
+		huh.NewInput().Title("Condition key:").
+			Description("The field to evaluate, e.g. x, y, readings").
+			Value(&conditionKey).
+			Validate(func(s string) error {
+				if strings.TrimSpace(s) == "" {
+					return errors.New("key cannot be empty")
+				}
+				return nil
+			}),
+		huh.NewSelect[string]().Title("Select a condition operator:").
+			Options(
+				huh.NewOption("gt (greater than)", "gt"),
+				huh.NewOption("gte (greater than or equal)", "gte"),
+				huh.NewOption("lt (less than)", "lt"),
+				huh.NewOption("lte (less than or equal)", "lte"),
+				huh.NewOption("eq (equal)", "eq"),
+				huh.NewOption("neq (not equal)", "neq"),
+				huh.NewOption("regex", "regex"),
+			).
+			Value(&operator),
+		huh.NewInput().Title("Condition value:").
+			Description("The threshold or regex value, e.g. 4, 80.5, true, a.*c").
+			Value(&conditionValue).
+			Validate(func(s string) error {
+				if strings.TrimSpace(s) == "" {
+					return errors.New("value cannot be empty")
+				}
+				return nil
+			}),
+	)).Run(); err != nil {
+		return nil, err
+	}
+
+	return map[string]any{
+		"data_capture_method": dcm,
+		"condition": map[string]any{
+			"evals": []any{
+				map[string]any{
+					"operator": operator,
+					"value":    map[string]any{conditionKey: parseValueString(conditionValue)},
+				},
+			},
+		},
+	}, nil
+}
+
+// parseValueString attempts to interpret a string as a number or boolean,
+// falling back to the raw string if neither applies.
+func parseValueString(s string) any {
+	s = strings.TrimSpace(s)
+	if f, err := strconv.ParseFloat(s, 64); err == nil {
+		return f
+	}
+	if b, err := strconv.ParseBool(s); err == nil {
+		return b
+	}
+	return s
+}
+
+// collectNotifications prompts the user for webhook and email notification settings.
+func collectNotifications(eventType string) ([]any, error) {
+	validateSeconds := func(s string) error {
+		if strings.TrimSpace(s) == "" {
+			return errors.New("value cannot be empty")
+		}
+		v, err := strconv.ParseFloat(s, 64)
+		if err != nil {
+			return errors.New("must be a number")
+		}
+		switch eventType {
+		case triggerEventPartOnline, triggerEventPartOffline:
+			if v <= 0 {
+				return errors.New("must be over 0 for liveness triggers")
+			}
+		default:
+			if v < 0 {
+				return errors.New("must be >= 0")
+			}
+		}
+		return nil
+	}
+
+	var notifications []any
+
+	// Section 1: Webhooks.
+	var addWebhook bool
+	if err := huh.NewForm(huh.NewGroup(
+		huh.NewNote().Title("Webhook notifications"),
+		huh.NewConfirm().Title("Add a webhook notification?").Value(&addWebhook),
+	)).Run(); err != nil {
+		return nil, err
+	}
+	for addWebhook {
+		var webhookURL, secondsStr string
+		var addAnother bool
+		if err := huh.NewForm(
+			huh.NewGroup(
+				huh.NewInput().Title("Webhook URL:").Value(&webhookURL).
+					Validate(func(s string) error {
+						u, parseErr := url.Parse(strings.TrimSpace(s))
+						if parseErr != nil || u.Scheme == "" || u.Host == "" {
+							return errors.New("not a valid url")
+						}
+						return nil
+					}),
+				huh.NewInput().Title("Seconds between notifications:").Value(&secondsStr).
+					Validate(validateSeconds),
+			),
+			huh.NewGroup(
+				huh.NewConfirm().Title("Add another webhook?").Value(&addAnother),
+			),
+		).Run(); err != nil {
+			return nil, err
+		}
+		seconds, _ := strconv.ParseFloat(secondsStr, 64) //nolint:errcheck
+		notifications = append(notifications, map[string]any{
+			"type": notifTypeWebhook, "value": webhookURL, "seconds_between_notifications": seconds,
+		})
+		addWebhook = addAnother
+	}
+
+	// Section 2: Email alerts — email all machine owners.
+	var emailAll bool
+	if err := huh.NewForm(huh.NewGroup(
+		huh.NewNote().Title("Email alerts"),
+		huh.NewConfirm().Title("Email all machine owners?").Value(&emailAll),
+	)).Run(); err != nil {
+		return nil, err
+	}
+	if emailAll {
+		var secondsStr string
+		if err := huh.NewForm(huh.NewGroup(
+			huh.NewInput().Title("Seconds between alerts (all machine owners):").
+				Value(&secondsStr).
+				Validate(validateSeconds),
+		)).Run(); err != nil {
+			return nil, err
+		}
+		seconds, _ := strconv.ParseFloat(secondsStr, 64) //nolint:errcheck
+		notifications = append(notifications, map[string]any{
+			"type": notifTypeEmail, "value": "all_machine_owners", "seconds_between_notifications": seconds,
+		})
+	}
+
+	// Section 3: Email alerts — specific email addresses.
+	var addSpecific bool
+	if err := huh.NewForm(huh.NewGroup(
+		huh.NewConfirm().Title("Email a specific email address?").Value(&addSpecific),
+	)).Run(); err != nil {
+		return nil, err
+	}
+	for addSpecific {
+		var email, secondsStr string
+		var addAnother bool
+		if err := huh.NewForm(
+			huh.NewGroup(
+				huh.NewInput().Title("Email address:").Value(&email).
+					Validate(func(s string) error {
+						if !strings.Contains(strings.TrimSpace(s), "@") {
+							return errors.New("must be a valid email address")
+						}
+						return nil
+					}),
+				huh.NewInput().Title("Seconds between alerts (this email):").
+					Value(&secondsStr).
+					Validate(validateSeconds),
+			),
+			huh.NewGroup(
+				huh.NewConfirm().Title("Add another email?").Value(&addAnother),
+			),
+		).Run(); err != nil {
+			return nil, err
+		}
+		seconds, _ := strconv.ParseFloat(secondsStr, 64) //nolint:errcheck
+		notifications = append(notifications, map[string]any{
+			"type": notifTypeEmail, "value": strings.TrimSpace(email), "seconds_between_notifications": seconds,
+		})
+		addSpecific = addAnother
+	}
+
+	if len(notifications) == 0 {
+		return nil, errors.New("at least one notification (webhook or email) is required")
+	}
+
+	return notifications, nil
+}
+
+func toAnySlice(ss []string) []any {
+	result := make([]any, len(ss))
+	for i, s := range ss {
+		result[i] = s
+	}
+	return result
+}
+
+func machinesPartDeleteTriggerAction(ctx context.Context, cmd *cli.Command, args machinesPartDeleteTriggerArgs) error {
+	client, err := newViamClient(ctx, cmd)
+	if err != nil {
+		return err
+	}
+
+	part, err := client.robotPart(ctx, args.Organization, args.Location, args.Machine, args.Part)
+	if err != nil {
+		return err
+	}
+
+	config := part.RobotConfig.AsMap()
+
+	triggers, err := resourcesFromPartConfig(config, "triggers")
+	if err != nil {
+		return err
+	}
+	if len(triggers) == 0 {
+		printf(cmd.Root().Writer, "no triggers found on part %s", part.Name)
+		return nil
+	}
+
+	if args.Name == "" {
+		idx, err := fuzzyfinder.Find(triggers, func(i int) string {
+			name, _ := triggers[i]["name"].(string)
+			return name
+		})
+		if err != nil {
+			return err
+		}
+		args.Name, _ = triggers[idx]["name"].(string)
+	}
+	var updatedTriggers []map[string]any
+	found := false
+	for _, t := range triggers {
+		if t["name"] == args.Name {
+			found = true
+		} else {
+			updatedTriggers = append(updatedTriggers, t)
+		}
+	}
+	if !found {
+		printf(cmd.Root().Writer, "trigger %q not found", args.Name)
+		return nil
+	}
+
+	config["triggers"] = updatedTriggers
+
+	pbConfig, err := protoutils.StructToStructPb(config)
+	if err != nil {
+		return err
+	}
+
+	req := apppb.UpdateRobotPartRequest{Id: part.Id, Name: part.Name, RobotConfig: pbConfig}
+	_, err = client.client.UpdateRobotPart(ctx, &req)
+	if err != nil {
+		return err
+	}
+
+	printf(cmd.Root().Writer, "successfully deleted trigger %q", args.Name)
+	return nil
+}
+
+// validDataCaptureMethods maps component/service subtypes to their valid data capture method names.
+var validDataCaptureMethods = map[string][]string{
+	"arm":     {"EndPosition", "JointPositions", "DoCommand"},
+	"audioin": {"GetAudio", "DoCommand"},
+	"base":    {"DoCommand"},
+	"board":   {"Analogs", "Gpios", "DoCommand"},
+	"button":  {"DoCommand"},
+	"camera":  {"NextPointCloud", "ReadImage", "GetImages", "DoCommand"},
+	"encoder": {"TicksCount", "DoCommand"},
+	"gantry":  {"Position", "Lengths", "DoCommand"},
+	"generic": {"DoCommand"},
+	"gripper": {"DoCommand"},
+	"input":   {"DoCommand"},
+	"motor":   {"Position", "IsPowered", "DoCommand"},
+	"movement_sensor": {
+		"Position", "LinearVelocity", "AngularVelocity", "CompassHeading",
+		"LinearAcceleration", "Orientation", "Readings", "DoCommand",
+	},
+	"pose_tracker": {"DoCommand"},
+	"power_sensor": {"Voltage", "Current", "Power", "Readings", "DoCommand"},
+	"sensor":       {"Readings", "DoCommand"},
+	"servo":        {"Position", "DoCommand"},
+	"switch":       {"DoCommand"},
+}
+
+// warnUnknownKeys warns about any keys in m that are not in validKeys.
+func warnUnknownKeys(w io.Writer, context string, m map[string]any, validKeys map[string]struct{}) {
+	for k := range m {
+		if _, ok := validKeys[k]; !ok {
+			warningf(w, "unknown field %q in %s", k, context)
+		}
+	}
+}
+
+// validateTriggerConfig validates the trigger configuration and returns an error for invalid configs.
+func validateTriggerConfig(w io.Writer, config, triggerConfig map[string]any) error {
+	// warn about unknown top-level keys
+	warnUnknownKeys(w, "trigger config", triggerConfig, map[string]struct{}{
+		"name": {}, "event": {}, "notifications": {}, "disabled": {},
+	})
+
+	// name: required non-empty string
+	nameRaw, ok := triggerConfig["name"]
+	if !ok {
+		return errors.New("trigger config missing required field \"name\"")
+	}
+	name, ok := nameRaw.(string)
+	if !ok || name == "" {
+		return errors.New("trigger \"name\" must be a non-empty string")
+	}
+
+	// 2. event: required map
+	eventRaw, ok := triggerConfig["event"]
+	if !ok {
+		return errors.New("trigger config missing required field \"event\"")
+	}
+	event, ok := eventRaw.(map[string]any)
+	if !ok {
+		return errors.New("trigger \"event\" must be an object")
+	}
+
+	// 3. event.type: must be one of the valid types
+	validEventTypes := map[string]struct{}{
+		triggerEventPartOnline:              {},
+		triggerEventPartOffline:             {},
+		triggerEventPartDataSynced:          {},
+		triggerEventConditionalDataIngested: {},
+		triggerEventConditionalLogsIngested: {},
+	}
+	eventTypeRaw, ok := event["type"]
+	if !ok {
+		return errors.New("trigger event missing required field \"type\"")
+	}
+	eventType, ok := eventTypeRaw.(string)
+	_, validType := validEventTypes[eventType]
+	if !ok || !validType {
+		return fmt.Errorf(
+			"trigger event type must be one of: part_online, part_offline, "+
+				"part_data_ingested, conditional_data_ingested, conditional_logs_ingested; got %q", eventTypeRaw)
+	}
+
+	// warn about unknown event keys
+	validEventKeys := map[string]struct{}{"type": {}}
+	switch eventType {
+	case triggerEventPartDataSynced:
+		validEventKeys["data_ingested"] = struct{}{}
+	case triggerEventConditionalDataIngested:
+		validEventKeys["conditional"] = struct{}{}
+	case triggerEventConditionalLogsIngested:
+		validEventKeys["log_levels"] = struct{}{}
+	}
+	warnUnknownKeys(w, "event", event, validEventKeys)
+
+	// 4. event-type-specific validation
+	switch eventType {
+	case triggerEventPartDataSynced:
+		if err := validateDataSynced(event); err != nil {
+			return err
+		}
+	case triggerEventConditionalDataIngested:
+		if err := validateConditionalDataIngested(w, event, config); err != nil {
+			return err
+		}
+	case triggerEventConditionalLogsIngested:
+		if err := validateConditionalLogsIngested(event); err != nil {
+			return err
+		}
+	}
+
+	// 5. notifications: required non-empty array
+	notificationsRaw, ok := triggerConfig["notifications"]
+	if !ok {
+		return errors.New("trigger config missing required field \"notifications\"")
+	}
+	notifications, ok := notificationsRaw.([]any)
+	if !ok || len(notifications) == 0 {
+		return errors.New("trigger \"notifications\" must be a non-empty array")
+	}
+
+	// 6. validate each notification
+	for i, nRaw := range notifications {
+		n, ok := nRaw.(map[string]any)
+		if !ok {
+			return fmt.Errorf("notification at index %d must be an object", i)
+		}
+		if err := validateNotification(w, n, i, eventType); err != nil {
+			return err
+		}
+	}
+
+	// 7. warnings
+	if disabled, ok := triggerConfig["disabled"].(bool); ok && disabled {
+		warningf(w, "trigger will be created in disabled state")
+	}
+
+	return nil
+}
+
+func validateDataSynced(event map[string]any) error {
+	diRaw, ok := event["data_ingested"]
+	if !ok {
+		return errors.New("event type \"part_data_ingested\" requires \"data_ingested\" field")
+	}
+	di, ok := diRaw.(map[string]any)
+	if !ok {
+		return errors.New("\"data_ingested\" must be an object")
+	}
+	dtRaw, ok := di["data_types"]
+	if !ok {
+		return errors.New("\"data_ingested\" requires \"data_types\" field")
+	}
+	dataTypes, ok := dtRaw.([]any)
+	if !ok || len(dataTypes) == 0 {
+		return errors.New("\"data_types\" must be a non-empty array")
+	}
+	validDataTypes := map[string]bool{"binary": true, "tabular": true, "file": true, "unspecified": true}
+	for _, dt := range dataTypes {
+		s, ok := dt.(string)
+		if !ok || !validDataTypes[s] {
+			return fmt.Errorf("invalid data type %q; must be one of: binary, tabular, file, unspecified", dt)
+		}
+	}
+	return nil
+}
+
+func validateConditionalDataIngested(w io.Writer, event, config map[string]any) error {
+	condRaw, ok := event["conditional"]
+	if !ok {
+		return errors.New("event type \"conditional_data_ingested\" requires \"conditional\" field")
+	}
+	cond, ok := condRaw.(map[string]any)
+	if !ok {
+		return errors.New("\"conditional\" must be an object")
+	}
+	dcmRaw, ok := cond["data_capture_method"]
+	if !ok {
+		return errors.New("\"conditional\" requires \"data_capture_method\" field")
+	}
+	dcm, ok := dcmRaw.(string)
+	if !ok || dcm == "" {
+		return errors.New("\"data_capture_method\" must be a non-empty string")
+	}
+	parts := strings.Split(dcm, ":")
+	if len(parts) != 3 || parts[0] == "" || parts[1] == "" || parts[2] == "" {
+		return fmt.Errorf("\"data_capture_method\" must have format subtype:name:method (e.g., sensor:my-sensor:Readings); got %q", dcm)
+	}
+	subtype := parts[0]
+	componentName := parts[1]
+	methodName := parts[2]
+
+	// cross-reference against components and services in the part config
+	if err := validateComponentExists(config, subtype, componentName); err != nil {
+		return err
+	}
+
+	// validate method name against known methods for this subtype
+	if methods, known := validDataCaptureMethods[subtype]; known {
+		valid := false
+		for _, m := range methods {
+			if m == methodName {
+				valid = true
+				break
+			}
+		}
+		if !valid {
+			return fmt.Errorf("method %q is not a valid data capture method for %q; valid methods: %s",
+				methodName, subtype, strings.Join(methods, ", "))
+		}
+	} else {
+		warningf(w, "unknown subtype %q; cannot validate method %q. "+
+			"If this is a custom component, ensure the method name is correct", subtype, methodName)
+	}
+
+	// validate condition.evals if present
+	if conditionRaw, ok := cond["condition"]; ok {
+		condition, ok := conditionRaw.(map[string]any)
+		if !ok {
+			return errors.New("\"condition\" must be an object")
+		}
+		if evalsRaw, ok := condition["evals"]; ok {
+			evals, ok := evalsRaw.([]any)
+			if !ok {
+				return errors.New("\"condition.evals\" must be an array")
+			}
+			if err := validateEvals(evals); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+// validateComponentExists checks that a component/service with the given name exists in the config
+// and its API subtype matches the expected subtype.
+func validateComponentExists(config map[string]any, subtype, componentName string) error {
+	for _, resourceType := range []string{"components", "services"} {
+		resources, err := resourcesFromPartConfig(config, resourceType)
+		if err != nil {
+			continue
+		}
+		for _, r := range resources {
+			name, _ := r["name"].(string)
+			if name != componentName {
+				continue
+			}
+			// found it — verify the API subtype matches
+			api, _ := r["api"].(string)
+			apiParts := strings.Split(api, ":")
+			if len(apiParts) == 3 && apiParts[2] != subtype {
+				return fmt.Errorf("component %q has subtype %q (api: %s), but data_capture_method specifies subtype %q",
+					componentName, apiParts[2], api, subtype)
+			}
+			return nil
+		}
+	}
+	return fmt.Errorf("no component or service named %q found in the part config; "+
+		"data_capture_method must reference an existing component", componentName)
+}
+
+func validateEvals(evals []any) error {
+	validOperators := map[string]bool{
+		"lt": true, "lte": true, "gt": true, "gte": true,
+		"eq": true, "neq": true, "regex": true,
+	}
+	for i, eRaw := range evals {
+		e, ok := eRaw.(map[string]any)
+		if !ok {
+			return fmt.Errorf("eval at index %d must be an object", i)
+		}
+		opRaw, ok := e["operator"]
+		if !ok {
+			return fmt.Errorf("eval at index %d missing required field \"operator\"", i)
+		}
+		op, ok := opRaw.(string)
+		if !ok || !validOperators[op] {
+			return fmt.Errorf("eval at index %d has invalid operator %q; must be one of: lt, lte, gt, gte, eq, neq, regex", i, opRaw)
+		}
+		if _, ok := e["value"]; !ok {
+			return fmt.Errorf("eval at index %d missing required field \"value\"", i)
+		}
+	}
+	return nil
+}
+
+func validateConditionalLogsIngested(event map[string]any) error {
+	llRaw, ok := event["log_levels"]
+	if !ok {
+		return errors.New("event type \"conditional_logs_ingested\" requires \"log_levels\" field")
+	}
+	logLevels, ok := llRaw.([]any)
+	if !ok || len(logLevels) == 0 {
+		return errors.New("\"log_levels\" must be a non-empty array")
+	}
+	validLevels := map[string]bool{"info": true, "warn": true, "error": true}
+	for _, ll := range logLevels {
+		s, ok := ll.(string)
+		if !ok || !validLevels[s] {
+			return fmt.Errorf("invalid log level %q; must be one of: info, warn, error", ll)
+		}
+	}
+	return nil
+}
+
+func validateNotification(w io.Writer, n map[string]any, index int, eventType string) error {
+	warnUnknownKeys(w, fmt.Sprintf("notification at index %d", index), n, map[string]struct{}{
+		"type": {}, "value": {}, "seconds_between_notifications": {},
+	})
+
+	// type
+	ntRaw, ok := n["type"]
+	if !ok {
+		return fmt.Errorf("notification at index %d missing required field \"type\"", index)
+	}
+	nt, ok := ntRaw.(string)
+	if !ok || (nt != notifTypeWebhook && nt != notifTypeEmail) {
+		return fmt.Errorf("notification at index %d has invalid type %q; must be \"webhook\" or \"email\"", index, ntRaw)
+	}
+
+	// value
+	valRaw, ok := n["value"]
+	if !ok {
+		return fmt.Errorf("notification at index %d missing required field \"value\"", index)
+	}
+	val, ok := valRaw.(string)
+	if !ok || val == "" {
+		return fmt.Errorf("notification at index %d \"value\" must be a non-empty string", index)
+	}
+
+	if nt == notifTypeWebhook {
+		u, err := url.Parse(val)
+		if err != nil || u.Scheme == "" || u.Host == "" {
+			return fmt.Errorf("notification at index %d has invalid webhook URL %q (must have scheme and host)", index, val)
+		}
+	}
+	if nt == notifTypeEmail {
+		if val != "all_machine_owners" && !strings.Contains(val, "@") {
+			return fmt.Errorf("notification at index %d has invalid email %q (must contain '@' or be \"all_machine_owners\")", index, val)
+		}
+	}
+
+	// seconds_between_notifications
+	if sbnRaw, ok := n["seconds_between_notifications"]; ok {
+		sbn, ok := sbnRaw.(float64)
+		if !ok {
+			return fmt.Errorf("notification at index %d \"seconds_between_notifications\" must be a number", index)
+		}
+		switch eventType {
+		case triggerEventPartOnline, triggerEventPartOffline:
+			if sbn <= 0 {
+				return fmt.Errorf("notification at index %d \"seconds_between_notifications\" must be over 0 for liveness triggers; got %v", index, sbn)
+			}
+		case triggerEventPartDataSynced, triggerEventConditionalDataIngested:
+			if sbn < 0 {
+				return fmt.Errorf("notification at index %d \"seconds_between_notifications\" must be >=0 for data triggers; got %v", index, sbn)
+			}
+		}
+	}
+
+	return nil
+}
+
+// validateJobConfig validates the fields of a job config map. When isUpdate is true,
+// this is an update-job so not all fields are required.
+func validateJobConfig(jobConfig, partConfig map[string]any, isUpdate bool) error {
+	// validate schedule
+	if schedule, ok := jobConfig["schedule"].(string); ok {
+		if err := validateJobSchedule(schedule); err != nil {
+			return err
+		}
+	} else if !isUpdate {
+		return errors.New("job config must include 'schedule' field (string)")
+	}
+
+	// validate resource
+	if resource, ok := jobConfig["resource"].(string); ok {
+		if resource == "" {
+			return errors.New("'resource' field must be a non-empty string")
+		}
+		if !resourceExistsInConfig(partConfig, resource) {
+			return fmt.Errorf("resource %q not found in part config", resource)
+		}
+	} else if !isUpdate {
+		return errors.New("job config must include 'resource' field (string)")
+	}
+
+	// validate method
+	if method, ok := jobConfig["method"].(string); ok {
+		if method == "" {
+			return errors.New("'method' field must be a non-empty string")
+		}
+	} else if !isUpdate {
+		return errors.New("job config must include 'method' field (string)")
+	}
+
+	// Validate command is a JSON object (map) if provided.
+	if command, ok := jobConfig["command"]; ok {
+		if _, ok := command.(map[string]any); !ok {
+			return errors.New("'command' field must be a JSON object")
+		}
+	}
+
+	// validate log configuration
+	if logConfig, ok := jobConfig["log_configuration"].(map[string]any); ok {
+		if level, ok := logConfig["level"].(string); ok {
+			validLevels := map[string]bool{
+				"debug": true, "info": true, "warn": true, "warning": true, "error": true,
+			}
+			if !validLevels[strings.ToLower(level)] {
+				return fmt.Errorf("log_configuration level must be one of: debug, info, warn, warning, error; got %q", level)
+			}
+		}
+	}
+
+	return nil
+}
+
+// resourceExistsInConfig checks if a resource name exists in the part's components or services.
+func resourceExistsInConfig(config map[string]any, name string) bool {
+	for _, key := range []string{"components", "services"} {
+		if arr, ok := config[key].([]any); ok {
+			for _, item := range arr {
+				if m, ok := item.(map[string]any); ok {
+					if m["name"] == name {
+						return true
+					}
+				}
+			}
+		}
+	}
+	return false
+}
+
+func validateJobSchedule(schedule string) error {
+	if strings.ToLower(schedule) == "continuous" {
+		return nil
+	}
+
+	intErr := validateInterval(schedule)
+	if intErr == nil {
+		return nil
+	}
+
+	cronErr := validateCronExpression(schedule)
+	if cronErr == nil {
+		return nil
+	}
+
+	return errors.Errorf(
+		"invalid schedule %q: not a valid interval (%v) or cron expression (%v)",
+		schedule, intErr, cronErr,
+	)
+}
+
+func validateInterval(interval string) error {
+	d, err := time.ParseDuration(interval)
+	if err != nil {
+		return err
+	}
+	if d <= 0 {
+		return errors.New("interval must be a positive duration")
+	}
+	return nil
+}
+
+func validateCronExpression(schedule string) error {
+	withSeconds := len(strings.Fields(schedule)) >= 6
+	if withSeconds {
+		p := cron.NewParser(cron.SecondOptional | cron.Minute | cron.Hour | cron.Dom | cron.Month | cron.Dow)
+		if _, err := p.Parse(schedule); err != nil {
+			return err
+		}
+	} else {
+		if _, err := cron.ParseStandard(schedule); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+type machinesPartAddJobArgs struct {
+	Part         string
+	Machine      string
+	Location     string
+	Organization string
+	Config       string
+}
+
+func machinesPartAddJobAction(ctx context.Context, cmd *cli.Command, args machinesPartAddJobArgs) error {
+	client, err := newViamClient(ctx, cmd)
+	if err != nil {
+		return err
+	}
+
+	var jobConfig map[string]any
+	var part *apppb.RobotPart
+
+	// If no config is provided, run the interactive huh flow.
+	if args.Config != "" {
+		// Non-interactive path: config and part are required flags.
+		jobConfig, err = parseJSONOrFile(args.Config)
+		if err != nil {
+			return errors.Wrap(err, "failed to parse job config")
+		}
+
+		partStr := strings.TrimSpace(args.Part)
+		if partStr == "" {
+			return errors.New("part is required when using --config; specify --part")
+		}
+		part, err = client.robotPart(ctx, args.Organization, args.Location, args.Machine, partStr)
+		if err != nil {
+			return err
+		}
+	} else {
+		// Get part ID
+		part, err = client.robotPart(ctx, args.Organization, args.Location, args.Machine, args.Part)
+		if err != nil {
+			return err
+		}
+
+		// 2. Build interactive form from the part config.
+		confMap := part.RobotConfig.AsMap()
+		var resourceOpts []huh.Option[string]
+		for _, key := range []string{"components", "services"} {
+			resources, err := resourcesFromPartConfig(confMap, key)
+			if err != nil {
+				return err
+			}
+			for _, r := range resources {
+				if n, ok := r["name"].(string); ok && n != "" {
+					resourceOpts = append(resourceOpts, huh.NewOption(n, n))
+				}
+			}
+		}
+		if len(resourceOpts) == 0 {
+			return errors.New("This machine contains no components or services")
+		}
+
+		// 3. Create the form and run it
+		var name, resource, method, commandStr, logLevel, scheduleType string
+		form := huh.NewForm(huh.NewGroup(
+			huh.NewNote().Title("Add a job to a part"),
+			huh.NewInput().Title("Set a job name:").Value(&name).
+				Validate(func(s string) error {
+					if strings.TrimSpace(s) == "" {
+						return errors.New("job name cannot be empty")
+					}
+					return nil
+				}),
+			huh.NewSelect[string]().Title("Select a resource:").Options(resourceOpts...).Value(&resource),
+			huh.NewInput().Title("Set a method:").Value(&method).
+				Validate(func(s string) error {
+					if strings.TrimSpace(s) == "" {
+						return errors.New("method cannot be empty")
+					}
+					return nil
+				}),
+			huh.NewInput().
+				TitleFunc(func() string {
+					if strings.ToLower(strings.TrimSpace(method)) != "docommand" {
+						return "(Optional) Add a JSON argument to your method"
+					}
+					return "Set a command in JSON format:"
+				}, &method).
+				PlaceholderFunc(func() string {
+					if strings.ToLower(strings.TrimSpace(method)) != "docommand" {
+						return "Unless you are using DoCommand, you will most likely leave this empty"
+					}
+					return "{}"
+				}, &method).
+				Value(&commandStr).
+				Validate(func(s string) error {
+					if strings.TrimSpace(s) == "" {
+						return nil
+					}
+					var cmd map[string]any
+					if err := json.Unmarshal([]byte(s), &cmd); err != nil {
+						return errors.Wrap(err, "invalid JSON object")
+					}
+					return nil
+				}),
+			huh.NewSelect[string]().
+				Title("Set the log threshold:").
+				Options(
+					huh.NewOption("Debug", "debug"),
+					huh.NewOption("Info", "info"),
+					huh.NewOption("Warn", "warn"),
+					huh.NewOption("Error", "error"),
+				).
+				Value(&logLevel),
+			huh.NewSelect[string]().
+				Title("Set the schedule type:").
+				Options(
+					huh.NewOption("Interval", "interval"),
+					huh.NewOption("Cron", "cron"),
+					huh.NewOption("Continuous", "continuous"),
+				).
+				Value(&scheduleType),
+		))
+		if err := form.Run(); err != nil {
+			return err
+		}
+
+		// 4. last page form loads based on what type of schedule is selected
+		var schedule string
+		switch scheduleType {
+		case "interval":
+			var intervalStr string
+			form2 := huh.NewForm(
+				huh.NewGroup(
+					huh.NewInput().
+						Title("Set the interval:").
+						Description("Valid intervals look like 10s, 1m, 1h1m, etc. (Go duration format).").
+						Validate(validateInterval).
+						Value(&intervalStr),
+				),
+			)
+			if err := form2.Run(); err != nil {
+				return err
+			}
+			schedule = intervalStr
+		case "cron":
+			var cronExpr string
+			form2 := huh.NewForm(
+				huh.NewGroup(
+					huh.NewInput().
+						Title("Cron expression:").
+						Description("Valid cron expressions look like 0 0 * * * for daily, */5 * * * * * for every 5 seconds, etc...").
+						Validate(validateCronExpression).
+						Value(&cronExpr),
+				),
+			)
+			if err := form2.Run(); err != nil {
+				return err
+			}
+			schedule = cronExpr
+		default:
+			schedule = "continuous"
+		}
+
+		// 5. Build the jobConfig map from the interactive inputs.
+		jobConfig = map[string]any{
+			"name": name, "schedule": schedule, "resource": resource, "method": method,
+		}
+
+		if method == "DoCommand" {
+			if strings.TrimSpace(commandStr) == "" {
+				jobConfig["command"] = map[string]any{}
+			} else {
+				var cmd map[string]any
+				if err := json.Unmarshal([]byte(commandStr), &cmd); err != nil {
+					return errors.Wrapf(err, "invalid command JSON")
+				}
+				jobConfig["command"] = cmd
+			}
+		}
+		if logLevel != "" {
+			jobConfig["log_configuration"] = map[string]any{"level": logLevel}
+		}
+	}
+
+	// Validate required fields and format
+	name, ok := jobConfig["name"].(string)
+	if !ok || name == "" {
+		return errors.New("job config must include 'name' field (string)")
+	}
+
+	config := part.RobotConfig.AsMap()
+	if err := validateJobConfig(jobConfig, config, false); err != nil {
+		return err
+	}
+
+	// Get existing jobs array or create new one
+	var jobs []any
+	if existingJobs, ok := config["jobs"]; ok {
+		if arr, ok := existingJobs.([]any); ok {
+			jobs = arr
+		}
+	}
+
+	// Check if job with same name exists
+	for _, j := range jobs {
+		if jobMap, ok := j.(map[string]any); ok {
+			if jobMap["name"] == name {
+				return fmt.Errorf("job with name %s already exists on part %s", name, part.Name)
+			}
+		}
+	}
+
+	jobs = append(jobs, jobConfig)
+	config["jobs"] = jobs
+
+	if err := client.updateRobotPart(ctx, part, config, nil); err != nil {
+		return err
+	}
+
+	printf(cmd.Root().Writer, "successfully added job %s to part %s", name, part.Name)
+	return nil
+}
+
+type machinesPartUpdateJobArgs struct {
+	Part         string
+	Machine      string
+	Location     string
+	Organization string
+	Name         string
+	Config       string
+}
+
+func machinesPartUpdateJobAction(ctx context.Context, cmd *cli.Command, args machinesPartUpdateJobArgs) error {
+	client, err := newViamClient(ctx, cmd)
+	if err != nil {
+		return err
+	}
+
+	part, err := client.robotPart(ctx, args.Organization, args.Location, args.Machine, args.Part)
+	if err != nil {
+		return err
+	}
+
+	newJobConfig, err := parseJSONOrFile(args.Config)
+	if err != nil {
+		return errors.Wrap(err, "failed to parse job config")
+	}
+
+	config := part.RobotConfig.AsMap()
+	if err := validateJobConfig(newJobConfig, config, true); err != nil {
+		return err
+	}
+
+	var jobs []any
+	if existingJobs, ok := config["jobs"]; ok {
+		if arr, ok := existingJobs.([]any); ok {
+			jobs = arr
+		}
+	}
+
+	// Find and update the job
+	found := false
+	for i, j := range jobs {
+		if jobMap, ok := j.(map[string]any); ok {
+			if jobMap["name"] == args.Name {
+				found = true
+				// Merge the new config into existing job, keeping the name
+				for k, v := range newJobConfig {
+					jobMap[k] = v
+				}
+				jobMap["name"] = args.Name // Ensure name doesn't change
+				jobs[i] = jobMap
+				break
+			}
+		}
+	}
+
+	if !found {
+		return fmt.Errorf("job %s not found on part %s", args.Name, part.Name)
+	}
+
+	config["jobs"] = jobs
+
+	if err := client.updateRobotPart(ctx, part, config, nil); err != nil {
+		return err
+	}
+
+	printf(cmd.Root().Writer, "successfully updated job %s on part %s", args.Name, part.Name)
+	return nil
+}
+
+type machinesPartDeleteJobArgs struct {
+	Part         string
+	Machine      string
+	Location     string
+	Organization string
+	Name         string
+}
+
+func machinesPartDeleteJobAction(ctx context.Context, cmd *cli.Command, args machinesPartDeleteJobArgs) error {
+	client, err := newViamClient(ctx, cmd)
+	if err != nil {
+		return err
+	}
+
+	part, err := client.robotPart(ctx, args.Organization, args.Location, args.Machine, args.Part)
+	if err != nil {
+		return err
+	}
+
+	config := part.RobotConfig.AsMap()
+
+	var jobs []any
+	if existingJobs, ok := config["jobs"]; ok {
+		if arr, ok := existingJobs.([]any); ok {
+			jobs = arr
+		}
+	}
+
+	// Filter out the job
+	var newJobs []any
+	found := false
+	for _, j := range jobs {
+		if jobMap, ok := j.(map[string]any); ok {
+			if jobMap["name"] != args.Name {
+				newJobs = append(newJobs, j)
+			} else {
+				found = true
+			}
+		} else {
+			newJobs = append(newJobs, j)
+		}
+	}
+
+	if !found {
+		return fmt.Errorf("job %s not found on part %s", args.Name, part.Name)
+	}
+
+	config["jobs"] = newJobs
+
+	if err := client.updateRobotPart(ctx, part, config, nil); err != nil {
+		return err
+	}
+
+	printf(cmd.Root().Writer, "successfully deleted job %s from part %s", args.Name, part.Name)
+	return nil
+}
+
+type robotsPartStatusArgs struct {
+	Organization string
+	Location     string
+	Machine      string
+	Part         string
+}
+
+// RobotsPartStatusAction is the corresponding Action for 'machines part status'.
+func RobotsPartStatusAction(ctx context.Context, cmd *cli.Command, args robotsPartStatusArgs) error {
+	client, err := newViamClient(ctx, cmd)
+	if err != nil {
+		return err
+	}
+
+	orgStr := args.Organization
+	locStr := args.Location
+	robotStr := args.Machine
+	part, err := client.robotPart(ctx, orgStr, locStr, robotStr, args.Part)
+	if err != nil {
+		return errors.Wrap(err, "could not get machine part")
+	}
+
+	if orgStr == "" || locStr == "" || robotStr == "" {
+		robot, err := client.robot(ctx, orgStr, locStr, part.Robot)
+		if err != nil {
+			return err
+		}
+		orgName, locName, err := client.getOrgAndLocationNamesForRobot(ctx, robot)
+		if err != nil {
+			return err
+		}
+		printf(cmd.Root().Writer, "%s -> %s -> %s", orgName, locName, robot.Name)
+	}
+
+	printMachinePartStatus(cmd, []*apppb.RobotPart{part})
+
+	return nil
+}
+
+type machinesPartHistoryArgs struct {
+	Organization  string
+	Location      string
+	Machine       string
+	Part          string
+	FilterByEmail string
+}
+
+// machinesPartHistoryAction is the corresponding action for 'machines part history'.
+func machinesPartHistoryAction(ctx context.Context, cmd *cli.Command, args machinesPartHistoryArgs) error {
+	client, err := newViamClient(ctx, cmd)
+	if err != nil {
+		return err
+	}
+	return client.machinesPartHistoryAction(ctx, cmd, args)
+}
+
+func (c *viamClient) machinesPartHistoryAction(ctx context.Context, cmd *cli.Command, args machinesPartHistoryArgs) error {
+	part, err := c.robotPart(ctx, args.Organization, args.Location, args.Machine, args.Part)
+	if err != nil {
+		return errors.Wrap(err, "could not get machine part")
+	}
+
+	resp, err := c.client.GetRobotPartHistory(ctx, &apppb.GetRobotPartHistoryRequest{Id: part.Id})
+	if err != nil {
+		return err
+	}
+
+	history := resp.History
+	if len(history) == 0 {
+		printf(cmd.Root().Writer, "no history found for part %s", part.Name)
+		return nil
+	}
+
+	for i, entry := range history {
+		if args.FilterByEmail != "" && (entry.EditedBy == nil || entry.EditedBy.Value != args.FilterByEmail) {
+			continue
+		}
+		when := "<unknown time>"
+		if entry.When != nil {
+			when = entry.When.AsTime().Format(time.UnixDate)
+		}
+		editedBy := "<unknown>"
+		if entry.EditedBy != nil && entry.EditedBy.Value != "" {
+			editedBy = entry.EditedBy.Value
+		}
+		printf(cmd.Root().Writer, "[%d] %s — edited by %s", i+1, when, editedBy)
+	}
+
+	return nil
+}
+
+type robotsPartAddFragmentArgs struct {
+	Organization string
+	Location     string
+	Machine      string
+	Part         string
+	Fragment     string
+}
+
+// RobotsPartAddFragmentAction is the corresponding action for 'machines part fragments add'
+func RobotsPartAddFragmentAction(ctx context.Context, cmd *cli.Command, args robotsPartAddFragmentArgs) error {
+	client, err := newViamClient(ctx, cmd)
+	if err != nil {
+		return err
+	}
+
+	part, err := client.robotPart(ctx, args.Organization, args.Location, args.Machine, args.Part)
+	if err != nil {
+		return err
+	}
+
+	fragmentResp, err := client.client.ListFragments(ctx, &apppb.ListFragmentsRequest{})
+	if err != nil {
+		return err
+	}
+
+	pbFragments := fragmentResp.Fragments
+
+	var idToAdd, nameToAdd string
+
+	if args.Fragment != "" {
+		// Fragment specified, find it by name or ID
+		found := false
+		for _, fragment := range pbFragments {
+			if fragment.Name == args.Fragment || fragment.Id == args.Fragment {
+				idToAdd = fragment.Id
+				nameToAdd = fragment.Name
+				found = true
+				break
+			}
+		}
+		if !found {
+			return fmt.Errorf("fragment %s not found", args.Fragment)
+		}
+	} else {
+		// No fragment specified, use fuzzyfinder
+		idx, err := fuzzyfinder.Find(pbFragments, func(i int) string { return pbFragments[i].Name })
+		if err != nil {
+			return err
+		}
+		idToAdd = pbFragments[idx].Id
+		nameToAdd = pbFragments[idx].Name
+	}
+
+	conf := part.RobotConfig.AsMap()
+	fragments, ok := conf["fragments"].([]any)
+	if !ok || fragments == nil {
+		fragments = []any{}
+	}
+
+	for _, fragment := range fragments {
+		fragment := fragment.(map[string]any)
+		for k, v := range fragment {
+			if k == "id" && v.(string) == idToAdd {
+				return fmt.Errorf("fragment %s already exists on part %s", nameToAdd, part.Name)
+			}
+		}
+	}
+
+	newFragment := map[string]any{"id": idToAdd}
+	fragments = append(fragments, newFragment)
+	conf["fragments"] = fragments
+	pbConf, err := protoutils.StructToStructPb(conf)
+	if err != nil {
+		return err
+	}
+
+	req := apppb.UpdateRobotPartRequest{Id: part.Id, Name: part.Name, RobotConfig: pbConf}
+	_, err = client.client.UpdateRobotPart(ctx, &req)
+	if err != nil {
+		return err
+	}
+
+	printf(cmd.Root().Writer, "successfully added fragment %s to part %s", nameToAdd, part.Name)
+	return nil
+}
+
+type robotsPartRemoveFragmentArgs struct {
+	Organization string
+	Location     string
+	Machine      string
+	Part         string
+	Fragment     string
+}
+
+// given a map of fragment names to IDs, allows the user to select one and returns the chosen name/ID
+func (c *viamClient) selectFragment(fragmentNamesToIDs map[string]string) (string, string, error) {
+	huhOptions := []huh.Option[string]{}
+
+	for name := range fragmentNamesToIDs {
+		huhOptions = append(huhOptions, huh.NewOption(name, name))
+	}
+	var selectedFragmentName string
+	form := huh.NewForm(
+		huh.NewGroup(
+			huh.NewNote().
+				Title("Select a fragment to remove"),
+			huh.NewSelect[string]().
+				Title("Select a fragment:").
+				Options(
+					huhOptions...,
+				).
+				Value(&selectedFragmentName),
+		),
+	)
+	err := form.Run()
+	if err != nil {
+		return "", "", errors.Wrap(err, "encountered an error in selecting fragment")
+	}
+	return selectedFragmentName, fragmentNamesToIDs[selectedFragmentName], nil
+}
+
+// getFragmentMap returns a map of the given part's fragment names to IDs
+func (c *viamClient) getFragmentMap(ctx context.Context, cmd *cli.Command, part *apppb.RobotPart) (map[string]string, error) {
+	conf := part.GetRobotConfig().AsMap()
+
+	fragments, ok := conf["fragments"].([]any)
+	if !ok || len(fragments) == 0 { // there are no fragments on the machine part
+		warningf(cmd.Root().ErrWriter, "no fragments found on part %s", part.Name)
+		return nil, nil
+	}
+	fragmentNamesToIDs := map[string]string{}
+	for _, fragment := range fragments {
+		f := fragment.(map[string]any)
+		for _, fragmentID := range f {
+			fragmentID := fragmentID.(string)
+			req := apppb.GetFragmentRequest{Id: fragmentID}
+			fragmentPb, err := c.client.GetFragment(ctx, &req)
+			if err != nil {
+				return nil, err
+			}
+			fragmentNamesToIDs[fragmentPb.Fragment.Name] = fragmentID
+		}
+	}
+
+	return fragmentNamesToIDs, nil
+}
+
+// RobotsPartRemoveFragmentAction is the corresponding action for `machines part fragments remove`
+func RobotsPartRemoveFragmentAction(ctx context.Context, cmd *cli.Command, args robotsPartRemoveFragmentArgs) error {
+	client, err := newViamClient(ctx, cmd)
+	if err != nil {
+		return err
+	}
+
+	part, err := client.robotPart(ctx, args.Organization, args.Location, args.Machine, args.Part)
+	if err != nil {
+		return err
+	}
+
+	fragmentNamesToIDs, err := client.getFragmentMap(ctx, cmd, part)
+	if err != nil || fragmentNamesToIDs == nil {
+		return err
+	}
+
+	var whichFragment, whichID string
+	if args.Fragment != "" {
+		// Fragment name or ID provided, bypass selection
+		var ok bool
+		whichID, ok = fragmentNamesToIDs[args.Fragment]
+		if ok {
+			// Found by name
+			whichFragment = args.Fragment
+		} else {
+			// Check if it's an ID
+			for name, id := range fragmentNamesToIDs {
+				if id == args.Fragment {
+					whichFragment = name
+					whichID = args.Fragment
+					ok = true
+					break
+				}
+			}
+			if !ok {
+				return errors.Errorf("fragment %s not found on part %s", args.Fragment, part.Name)
+			}
+		}
+	} else {
+		// No fragment provided, prompt user to select
+		whichFragment, whichID, err = client.selectFragment(fragmentNamesToIDs)
+		if err != nil {
+			return err
+		}
+	}
+
+	conf := part.GetRobotConfig().AsMap()
+	oldFragments := conf["fragments"].([]any)
+	newFragments := []any{}
+	for _, oldFragment := range oldFragments {
+		oldF := oldFragment.(map[string]any)
+		for _, id := range oldF {
+			if id.(string) != whichID {
+				newFragments = append(newFragments, oldFragment)
+			}
+		}
+	}
+
+	conf["fragments"] = newFragments
+	pbConf, err := protoutils.StructToStructPb(conf)
+	if err != nil {
+		return err
+	}
+
+	req := apppb.UpdateRobotPartRequest{Id: part.Id, Name: part.Name, RobotConfig: pbConf}
+	_, err = client.client.UpdateRobotPart(ctx, &req)
+	if err != nil {
+		return err
+	}
+
+	printf(cmd.Root().Writer, "successfully removed fragment %s from part %s", whichFragment, part.Name)
+	return nil
+}
+
+type robotsPartLogsArgs struct {
+	Organization string
+	Location     string
+	Machine      string
+	Part         string
+	Errors       bool
+	Tail         bool
+	Start        string
+	End          string
+	Count        int
+}
+
+// RobotsPartLogsAction is the corresponding Action for 'machines part logs'.
+func RobotsPartLogsAction(ctx context.Context, cmd *cli.Command, args robotsPartLogsArgs) error {
+	client, err := newViamClient(ctx, cmd)
+	if err != nil {
+		return err
+	}
+
+	return client.robotsPartLogsAction(ctx, cmd, args)
+}
+
+func (c *viamClient) robotsPartLogsAction(ctx context.Context, cmd *cli.Command, args robotsPartLogsArgs) error {
+	// Check if both start time and count are provided
+	// TODO: [APP-7415] Enhance LogsForPart API to Support Sorting Options for Log Display Order
+	// TODO: [APP-7450] Implement "Start Time with Count without End Time" Functionality in LogsForPart
+	if args.Start != "" && args.Count > 0 && args.End == "" {
+		return errors.New("unsupported functionality: specifying both a start time and a count without an end time is not supported. " +
+			"This behavior can be counterintuitive because logs are currently only sorted in descending order. " +
+			"For example, if there are 200 logs after the specified start time and you request 10 logs, it will return the 10 most recent logs, " +
+			"rather than the 10 logs closest to the start time. " +
+			"Please provide either a start time and an end time to define a clear range, or a count without a start time for recent logs",
+		)
+	}
+
+	orgStr := args.Organization
+	locStr := args.Location
+	robotStr := args.Machine
+	partStr := args.Part
+
+	var header string
+	if orgStr == "" || locStr == "" || robotStr == "" {
+		// TODO(RSDK-9727) - this is a little inefficient insofar as a `part` is created immediately
+		// here then also again within this `{tail|print}RobotPartLogs` call. Might be nice to have a
+		// helper API for getting logs from an already-existing `part`
+		part, err := c.robotPart(ctx, orgStr, locStr, robotStr, partStr)
+		if err != nil {
+			return err
+		}
+		robot, err := c.robot(ctx, orgStr, locStr, part.Robot)
+		if err != nil {
+			return err
+		}
+		orgName, locName, err := c.getOrgAndLocationNamesForRobot(ctx, robot)
+		if err != nil {
+			return err
+		}
+		header = fmt.Sprintf("%s -> %s -> %s", orgName, locName, robot.Name)
+	}
+
+	startTime, err := parseTimeString(args.Start)
+	if err != nil {
+		return errors.Wrap(err, "invalid start time format")
+	}
+	endTime, err := parseTimeString(args.End)
+	if err != nil {
+		return errors.Wrap(err, "invalid end time format")
+	}
+
+	if args.Tail {
+		return c.tailRobotPartLogs(
+			ctx, orgStr, locStr, robotStr, partStr,
+			args.Errors,
+			"",
+			header,
+		)
+	}
+	numLogs, err := getNumLogs(cmd, args.Count)
+	if err != nil {
+		return err
+	}
+	return c.printRobotPartLogs(
+		ctx, orgStr, locStr, robotStr, partStr,
+		args.Errors,
+		"",
+		header,
+		numLogs,
+		startTime, endTime,
+	)
+}
+
+type robotsPartRestartArgs struct {
+	Organization string
+	Location     string
+	Machine      string
+	Part         string
+}
+
+// RobotsPartRestartAction is the corresponding Action for 'machines part restart'.
+func RobotsPartRestartAction(ctx context.Context, cmd *cli.Command, args robotsPartRestartArgs) error {
+	client, err := newViamClient(ctx, cmd)
+	if err != nil {
+		return err
+	}
+
+	return client.robotPartRestart(ctx, cmd, args)
+}
+
+func (c *viamClient) robotPartRestart(ctx context.Context, cmd *cli.Command, args robotsPartRestartArgs) error {
+	orgStr := args.Organization
+	locStr := args.Location
+	robotStr := args.Machine
+	partStr := args.Part
+
+	part, err := c.robotPart(ctx, orgStr, locStr, robotStr, partStr)
+	if err != nil {
+		return err
+	}
+	_, err = c.client.MarkPartForRestart(ctx, &apppb.MarkPartForRestartRequest{PartId: part.Id})
+	if err != nil {
+		return err
+	}
+	infof(c.c.Root().Writer, "Request to restart part sent successfully")
+	return nil
+}
+
+type machinesPartRunArgs struct {
+	Organization string
+	Location     string
+	Machine      string
+	Part         string
+	Data         string
+	Stream       time.Duration
+	Method       string
+	Component    string
+}
+
+// apiToGRPCServiceName converts a resource API to its gRPC service name.
+// For example: rdk:component:camera -> viam.component.camera.v1.CameraService
+func apiToGRPCServiceName(api resource.API) string {
+	// Convert subtype from snake_case to lowercase (remove underscores)
+	subtypeLower := strings.ReplaceAll(api.SubtypeName, "_", "")
+
+	// Convert subtype to PascalCase for service name
+	// e.g., "movement_sensor" -> "MovementSensor"
+	parts := strings.Split(api.SubtypeName, "_")
+	var pascalParts []string
+	for _, p := range parts {
+		if len(p) > 0 {
+			pascalParts = append(pascalParts, strings.ToUpper(p[:1])+p[1:])
+		}
+	}
+	subtypePascal := strings.Join(pascalParts, "")
+
+	// Build the full service name
+	// Format: viam.<type>.<subtype_no_underscore>.v1.<SubtypePascal>Service
+	return fmt.Sprintf("viam.%s.%s.v1.%sService", api.Type.Name, subtypeLower, subtypePascal)
+}
+
+// isShortMethodName returns true if the method name is a short form (no dots or slashes).
+func isShortMethodName(method string) bool {
+	return !strings.Contains(method, ".") && !strings.Contains(method, "/")
+}
+
+// mergeComponentNameIntoData merges the component name into the data JSON.
+// If data is empty, it creates a new JSON object with just the name.
+// If data already has a "name" field, it is preserved (not overwritten).
+func mergeComponentNameIntoData(data, componentName string) (string, error) {
+	var dataMap map[string]interface{}
+	if data == "" {
+		dataMap = make(map[string]interface{})
+	} else {
+		if err := json.Unmarshal([]byte(data), &dataMap); err != nil {
+			return "", errors.Wrap(err, "failed to parse --data as JSON")
+		}
+	}
+
+	// Only set name if not already present
+	if _, exists := dataMap["name"]; !exists {
+		dataMap["name"] = componentName
+	}
+
+	result, err := json.Marshal(dataMap)
+	if err != nil {
+		return "", errors.Wrap(err, "failed to serialize data JSON")
+	}
+	return string(result), nil
+}
+
+// MachinesPartRunAction is the corresponding Action for 'machines part run'.
+func MachinesPartRunAction(ctx context.Context, cmd *cli.Command, args machinesPartRunArgs) error {
+	svcMethod := args.Method
+	if svcMethod == "" {
+		svcMethod = cmd.Args().First()
+	}
+	if svcMethod == "" && args.Component == "" {
+		return errors.New("service method required")
+	}
+
+	viamClient, err := newViamClient(ctx, cmd)
+	if err != nil {
+		return err
+	}
+
+	// Create logger based on presence of debugFlag.
+	logger := logging.FromZapCompatible(zap.NewNop().Sugar())
+	globalArgs, err := getGlobalArgs(cmd)
+	if err != nil {
+		return err
+	}
+	if globalArgs.Debug {
+		logger = logging.NewDebugLogger("cli")
+	}
+
+	data := args.Data
+
+	// If component is specified, resolve the method and merge name into data
+	if args.Component != "" {
+		// Connect to the robot to get resource information
+		dialCtx, fqdn, rpcOpts, err := viamClient.prepareDial(
+			ctx, args.Organization, args.Location, args.Machine, args.Part, globalArgs.Debug)
+		if err != nil {
+			return err
+		}
+
+		robotClient, err := viamClient.connectToRobot(dialCtx, fqdn, rpcOpts, globalArgs.Debug, logger)
+		if err != nil {
+			return err
+		}
+		defer func() {
+			utils.UncheckedError(robotClient.Close(ctx))
+		}()
+
+		// Find the component by name
+		var foundAPI *resource.API
+		for _, name := range robotClient.ResourceNames() {
+			if name.Name == args.Component {
+				apiCopy := name.API
+				foundAPI = &apiCopy
+				break
+			}
+		}
+		if foundAPI == nil {
+			return errors.Errorf("component %q not found on machine", args.Component)
+		}
+
+		// If method is a short name, expand it
+		if svcMethod == "" {
+			return errors.New("method is required when using --component")
+		}
+		if isShortMethodName(svcMethod) {
+			serviceName := apiToGRPCServiceName(*foundAPI)
+			svcMethod = fmt.Sprintf("%s.%s", serviceName, svcMethod)
+		}
+
+		// Merge component name into data
+		data, err = mergeComponentNameIntoData(data, args.Component)
+		if err != nil {
+			return err
+		}
+	}
+
+	return viamClient.runRobotPartCommand(
+		ctx,
+		args.Organization,
+		args.Location,
+		args.Machine,
+		args.Part,
+		svcMethod,
+		data,
+		args.Stream,
+		globalArgs.Debug,
+		logger,
+	)
+}
+
+type robotsPartShellArgs struct {
+	Organization string
+	Location     string
+	Machine      string
+	Part         string
+}
+
+// RobotsPartShellAction is the corresponding Action for 'machines part shell'.
+func RobotsPartShellAction(ctx context.Context, cmd *cli.Command, args robotsPartShellArgs) error {
+	infof(cmd.Root().Writer, "Ensure machine part has a valid shell type service")
+
+	client, err := newViamClient(ctx, cmd)
+	if err != nil {
+		return err
+	}
+
+	// Create logger based on presence of debugFlag.
+	logger := logging.FromZapCompatible(zap.NewNop().Sugar())
+	globalArgs, err := getGlobalArgs(cmd)
+	if err != nil {
+		return err
+	}
+	if globalArgs.Debug {
+		logger = logging.NewDebugLogger("cli")
+	}
+
+	return client.startRobotPartShell(
+		ctx,
+		args.Organization,
+		args.Location,
+		args.Machine,
+		args.Part,
+		globalArgs.Debug,
+		logger,
+	)
+}
+
+var (
+	errNoFiles                         = errors.New("must provide files to copy")
+	errLastArgOfFromMissing            = errors.New("expected last argument to be <copy to path>")
+	errLastArgOfToMissing              = errors.New("expected last argument to be machine:<copy to path>")
+	errDirectoryCopyRequestNoRecursion = errors.New("file is a directory but copy recursion not used (you can use -r to enable this)")
+)
+
+type copyFromPathInvalidError struct {
+	path string
+}
+
+func (err copyFromPathInvalidError) Error() string {
+	return fmt.Sprintf("expected argument %q to be machine:<copy from path>", err.path)
+}
+
+type machinesPartCopyFilesArgs struct {
+	Organization string
+	Location     string
+	Machine      string
+	Part         string
+	Recursive    bool
+	Preserve     bool
+	NoProgress   bool
+}
+
+type wrongNumArgsError struct {
+	have int
+	min  int
+	max  int
+}
+
+func (err wrongNumArgsError) Error() string {
+	if err.min != err.max && err.max == 0 {
+		noun := "arguments"
+		if err.min == 1 {
+			noun = "argument"
+		}
+		return fmt.Sprintf("expected %d %s but got %d", err.min, noun, err.have)
+	}
+	return fmt.Sprintf("expected %d-%d arguments but got %d", err.min, err.max, err.have)
+}
+
+type machinesPartGetFTDCArgs struct {
+	Organization string
+	Location     string
+	Machine      string
+	Part         string
+}
+
+// MachinesPartGetFTDCAction is the corresponding Action for 'machines part get-ftdc'.
+func MachinesPartGetFTDCAction(ctx context.Context, cmd *cli.Command, args machinesPartGetFTDCArgs) error {
+	client, err := newViamClient(ctx, cmd)
+	if err != nil {
+		return err
+	}
+
+	globalArgs, err := getGlobalArgs(cmd)
+	if err != nil {
+		return err
+	}
+	logger := globalArgs.createLogger()
+
+	return client.machinesPartGetFTDCAction(ctx, cmd, args, globalArgs.Debug, logger)
+}
+
+// MachinesPartCopyFilesAction is the corresponding Action for 'machines part cp'.
+func MachinesPartCopyFilesAction(ctx context.Context, cmd *cli.Command, args machinesPartCopyFilesArgs) error {
+	client, err := newViamClient(ctx, cmd)
+	if err != nil {
+		return err
+	}
+
+	globalArgs, err := getGlobalArgs(cmd)
+	if err != nil {
+		return err
+	}
+	logger := globalArgs.createLogger()
+
+	return client.machinesPartCopyFilesAction(ctx, cmd, args, logger)
+}
+
+func (c *viamClient) machinesPartCopyFilesAction(
+	ctx context.Context,
+	cmd *cli.Command,
+	flagArgs machinesPartCopyFilesArgs,
+	logger logging.Logger,
+) error {
+	args := cmd.Args().Slice()
+	if len(args) == 0 {
+		return errNoFiles
+	}
+
+	// the general format is
+	// from:
+	//		cp machine:path1 machine:path2 ... local_destination
+	// to:
+	//		cp path1 path2 ... remote_destination
+	// we just need to look for machine: to determine what the user's intent is
+	determineDirection := func(args []string) (isFrom bool, destination string, paths []string, err error) {
+		const machinePrefix = "machine:"
+		isFrom = strings.HasPrefix(args[0], machinePrefix)
+
+		if strings.HasPrefix(args[len(args)-1], machinePrefix) {
+			if isFrom {
+				return false, "", nil, errLastArgOfFromMissing
+			}
+		} else if !isFrom {
+			return false, "", nil, errLastArgOfToMissing
+		}
+
+		destination = args[len(args)-1]
+		if !isFrom {
+			destination = strings.TrimPrefix(destination, machinePrefix)
+			// If the user passes a `~` for their machine destination, we should treat
+			// it as root rather than trying to create a file named `~` at the root
+			if destination == "~" {
+				destination = ""
+			}
+		}
+
+		// all but the last arg are what we are copying to/from
+		for _, arg := range args[:len(args)-1] {
+			if isFrom && !strings.HasPrefix(arg, machinePrefix) {
+				return false, "", nil, copyFromPathInvalidError{arg}
+			}
+			if isFrom {
+				arg = strings.TrimPrefix(arg, machinePrefix)
+			}
+			paths = append(paths, arg)
+		}
+		return
+	}
+
+	isFrom, destination, paths, err := determineDirection(args)
+	if err != nil {
+		return err
+	}
+
+	globalArgs, err := getGlobalArgs(cmd)
+	if err != nil {
+		return err
+	}
+	pm := NewProgressManager([]*Step{
+		{ID: "copy", Message: "Copying files...", CompletedMsg: "Files copied", IndentLevel: 0},
+	}, WithProgressOutput(!flagArgs.NoProgress))
+	doCopy := func() (int, error) {
+		var copyFunc func() error
+		if isFrom {
+			copyFunc = func() error {
+				return c.copyFilesFromMachine(
+					ctx,
+					flagArgs.Organization,
+					flagArgs.Location,
+					flagArgs.Machine,
+					flagArgs.Part,
+					globalArgs.Debug,
+					flagArgs.Recursive,
+					flagArgs.Preserve,
+					paths,
+					destination,
+					logger,
+				)
+			}
+		} else {
+			copyFunc = func() error {
+				return c.copyFilesToMachine(
+					ctx,
+					flagArgs.Organization,
+					flagArgs.Location,
+					flagArgs.Machine,
+					flagArgs.Part,
+					globalArgs.Debug,
+					flagArgs.Recursive,
+					flagArgs.Preserve,
+					paths,
+					destination,
+					logger,
+					flagArgs.NoProgress,
+				)
+			}
+		}
+		if err := pm.Start("copy"); err != nil {
+			return 0, err
+		}
+		defer pm.Stop()
+		attemptCount, err := c.retryableCopy(
+			cmd,
+			pm,
+			copyFunc,
+			isFrom,
+		)
+		return attemptCount, err
+	}
+	attemptCount, err := doCopy()
+	if err != nil {
+		defer pm.Fail("copy", err) //nolint:errcheck
+		if statusErr := status.Convert(err); statusErr != nil &&
+			statusErr.Code() == codes.InvalidArgument &&
+			statusErr.Message() == shell.ErrMsgDirectoryCopyRequestNoRecursion {
+			return errDirectoryCopyRequestNoRecursion
+		}
+		return fmt.Errorf("all %d copy attempts failed, try again later", attemptCount)
+	}
+	if err := pm.Complete("copy"); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (c *viamClient) machinesPartGetFTDCAction(
+	ctx context.Context,
+	cmd *cli.Command,
+	flagArgs machinesPartGetFTDCArgs,
+	debug bool,
+	logger logging.Logger,
+) error {
+	args := cmd.Args().Slice()
+	var targetPath string
+	switch numArgs := len(args); numArgs {
+	case 0:
+		var err error
+		targetPath, err = os.Getwd()
+		if err != nil {
+			return err
+		}
+	case 1:
+		targetPath = args[0]
+	default:
+		return wrongNumArgsError{numArgs, 0, 1}
+	}
+
+	part, err := c.robotPart(ctx, flagArgs.Organization, flagArgs.Location, flagArgs.Machine, flagArgs.Part)
+	if err != nil {
+		return err
+	}
+	// Intentional use of path instead of filepath: Windows understands both / and
+	// \ as path separators, and we don't want a cli running on Windows to send
+	// a path using \ to a *NIX machine.
+	src := path.Join(ftdcPath, part.Id)
+	gArgs, err := getGlobalArgs(cmd)
+	quiet := err == nil && gArgs != nil && gArgs.Quiet
+	var startTime time.Time
+	if !quiet {
+		startTime = time.Now()
+		printf(cmd.Root().Writer, "Saving to %s ...", path.Join(targetPath, part.GetId()))
+	}
+	if err := c.copyFilesFromMachine(
+		ctx,
+		flagArgs.Organization,
+		flagArgs.Location,
+		flagArgs.Machine,
+		flagArgs.Part,
+		debug,
+		true,
+		false,
+		[]string{src},
+		targetPath,
+		logger,
+	); err != nil {
+		if statusErr := status.Convert(err); statusErr != nil &&
+			statusErr.Code() == codes.InvalidArgument &&
+			statusErr.Message() == shell.ErrMsgDirectoryCopyRequestNoRecursion {
+			return errDirectoryCopyRequestNoRecursion
+		}
+		return err
+	}
+	if !quiet {
+		printf(cmd.Root().Writer, "Done in %s.", time.Since(startTime))
+	}
+	return nil
+}
+
+type robotsPartTunnelArgs struct {
+	Organization    string
+	Location        string
+	Machine         string
+	Part            string
+	LocalPort       int
+	DestinationPort int
+}
+
+// RobotsPartTunnelAction is the corresponding Action for 'machines part tunnel'.
+func RobotsPartTunnelAction(ctx context.Context, cmd *cli.Command, args robotsPartTunnelArgs) error {
+	client, err := newViamClient(ctx, cmd)
+	if err != nil {
+		return err
+	}
+
+	return client.robotPartTunnel(ctx, cmd, args)
+}
+
+func tunnelTraffic(ctx context.Context, cmd *cli.Command, robotClient *client.RobotClient, local, dest int) error {
+	// don't block tunnel attempt if ListTunnels fails in any way - it may be unimplemented.
+	// TODO: early return if ListTunnels fails.
+	if tunnels, err := robotClient.ListTunnels(ctx); err == nil {
+		allowed := false
+		for _, t := range tunnels {
+			if t.Port == dest {
+				allowed = true
+				break
+			}
+		}
+		if !allowed {
+			return errors.Errorf(
+				"tunneling to destination port %v not allowed. "+
+					"Please ensure the traffic_tunnel_endpoints configuration is set correctly on the machine.",
+				dest,
+			)
+		}
+	}
+
+	li, err := net.Listen("tcp", net.JoinHostPort("localhost", strconv.Itoa(local)))
+	if err != nil {
+		return fmt.Errorf("failed to create listener %w", err)
+	}
+	infof(cmd.Root().Writer, "tunneling connections from local port %v to destination port %v on machine part...", local, dest)
+	defer func() {
+		if err := li.Close(); err != nil {
+			warningf(cmd.Root().ErrWriter, "error closing listener: %s", err)
+		}
+	}()
+
+	var wg sync.WaitGroup
+	for {
+		if ctx.Err() != nil {
+			break
+		}
+		conn, err := li.Accept()
+		if err != nil {
+			warningf(cmd.Root().ErrWriter, "failed to accept connection: %s", err)
+			continue
+		}
+
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			// call tunnel once per connection, the connection passed in will be closed
+			// by Tunnel.
+			if err := robotClient.Tunnel(ctx, conn, dest); err != nil {
+				printf(cmd.Root().Writer, "error while tunneling connection: %s", err)
+			}
+		}()
+	}
+	wg.Wait()
+	return nil
+}
+
+func (c *viamClient) robotPartTunnel(ctx context.Context, cmd *cli.Command, args robotsPartTunnelArgs) error {
+	orgStr := args.Organization
+	locStr := args.Location
+	robotStr := args.Machine
+	partStr := args.Part
+
+	// Create logger based on presence of debugFlag.
+	logger := logging.FromZapCompatible(zap.NewNop().Sugar())
+	globalArgs, err := getGlobalArgs(cmd)
+	if err != nil {
+		return err
+	}
+	if globalArgs.Debug {
+		logger = logging.NewDebugLogger("cli")
+	}
+
+	dialCtx, fqdn, rpcOpts, err := c.prepareDial(ctx, orgStr, locStr, robotStr, partStr, globalArgs.Debug)
+	if err != nil {
+		return err
+	}
+
+	robotClient, err := c.connectToRobot(dialCtx, fqdn, rpcOpts, globalArgs.Debug, logger)
+	if err != nil {
+		return err
+	}
+	return tunnelTraffic(ctx, cmd, robotClient, args.LocalPort, args.DestinationPort)
+}
+
+// checkUpdateResponse holds the values used to hold release information.
+type getLatestReleaseResponse struct {
+	Name       string `json:"name"`
+	TagName    string `json:"tag_name"`
+	TarballURL string `json:"tarball_url"`
+}
+
+func getLatestRelease() (getLatestReleaseResponse, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+
+	resp := getLatestReleaseResponse{}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, rdkReleaseURL, nil)
+	if err != nil {
+		return getLatestReleaseResponse{}, err
+	}
+
+	client := http.DefaultClient
+	res, err := client.Do(req)
+	if err != nil {
+		return getLatestReleaseResponse{}, err
+	}
+
+	err = json.NewDecoder(res.Body).Decode(&resp)
+	if err != nil {
+		return getLatestReleaseResponse{}, err
+	}
+
+	defer utils.UncheckedError(res.Body.Close())
+	return resp, nil
+}
+
+// getLatestReleaseVersionFunc can be overridden in tests to mock GitHub API calls
+var getLatestReleaseVersionFunc = func() (string, error) {
+	resp, err := getLatestRelease()
+	if err != nil {
+		return "", err
+	}
+	return resp.TagName, err
+}
+
+func localVersion() (*semver.Version, error) {
+	appVersion := rconfig.Version
+	if appVersion == "" {
+		return nil, errors.New("local build has no version set (dev build or missing ldflags)")
+	}
+	localVersion, err := semver.NewVersion(appVersion)
+	if err != nil {
+		return nil, errors.Errorf("failed to parse local build version %q: %v", appVersion, err)
+	}
+	return localVersion, nil
+}
+
+func latestVersion() (*semver.Version, error) {
+	latestRelease, err := getLatestReleaseVersionFunc()
+	if err != nil {
+		return nil, fmt.Errorf("failed to get latest release information: %w", err)
+	}
+	latestVersion, err := semver.NewVersion(latestRelease)
+	if err != nil {
+		return nil, errors.New("failed to parse latest release version")
+	}
+	return latestVersion, nil
+}
+
+func (conf *Config) checkUpdate(cmd *cli.Command) error {
+	var shouldCheckUpdate bool
+
+	// if there has never been a last update check, then we should definitely alert as necessary
+	if conf.LastUpdateCheck == "" {
+		shouldCheckUpdate = true
+	} else {
+		lastUpdateCheck, err := time.Parse(time.RFC3339, conf.LastUpdateCheck)
+		if err != nil {
+			warningf(cmd.Root().ErrWriter, "CLI Update Check: failed to parse last update check: %w", err)
+			return nil
+		}
+		// if we've warned people within the last hour, don't do so again
+		shouldCheckUpdate = time.Since(lastUpdateCheck) > time.Hour
+	}
+
+	if !shouldCheckUpdate {
+		return nil
+	}
+
+	// indicate that the most recent check happened now
+	if err := conf.updateLastUpdateCheck(); err != nil {
+		warningf(cmd.Root().ErrWriter, "CLI Update Check: failed to update config update time: %w", err)
+		return nil
+	}
+
+	globalArgs, err := getGlobalArgs(cmd)
+	if err != nil {
+		return err
+	}
+	if globalArgs.Quiet {
+		return nil
+	}
+
+	latestVersion, err := latestVersion()
+	// failure to parse `latestRelease` is expected for local builds; we don't want overly
+	// noisy warnings here so only alert in these cases if debug flag is on
+	if err != nil && globalArgs.Debug {
+		warningf(cmd.Root().ErrWriter, "CLI Update Check: %w", err)
+	}
+	localVersion, err := localVersion()
+	if err != nil && globalArgs.Debug {
+		warningf(cmd.Root().ErrWriter, "CLI Update Check: %w", err)
+	}
+	// we know both the local version and the latest version so we can make a determination
+	// from that alone on whether or not to alert users to update
+	if localVersion != nil && latestVersion != nil {
+		// the local version is out of date, so we know to warn
+		if localVersion.LessThan(latestVersion) {
+			warningf(cmd.Root().ErrWriter, "CLI Update Check: Your CLI (%s) is out of date. Consider updating to version %s. "+
+				"Run 'viam update' or see https://docs.viam.com/cli/#install", localVersion.Original(), latestVersion.Original())
+		}
+		return nil
+	}
+
+	dateCompiledRaw := rconfig.DateCompiled
+
+	// `go build` will not set the compilation flags needed for this check
+	if dateCompiledRaw == "" {
+		return nil
+	}
+
+	dateCompiled, err := time.Parse("2006-01-02", dateCompiledRaw)
+	if err != nil {
+		warningf(cmd.Root().ErrWriter, "CLI Update Check: failed to parse compilation date: %w", err)
+		return nil
+	}
+
+	// the local build is more than a week old, so we should warn
+	if time.Since(dateCompiled) > time.Hour*24*7 {
+		var updateInstructions string
+		if latestVersion != nil {
+			updateInstructions = fmt.Sprintf(" to version: %s", latestVersion.Original())
+		}
+		warningf(cmd.Root().ErrWriter, "CLI Update Check: Your CLI is more than a week old. "+
+			"New CLI releases happen weekly; consider updating%s. Run 'viam update' or see https://docs.viam.com/cli/#install", updateInstructions)
+	}
+	return nil
+}
+
+type updateArgs struct {
+	NoProgress bool
+}
+
+// UpdateCLIAction updates the CLI to the latest version.
+func UpdateCLIAction(ctx context.Context, cmd *cli.Command, args updateArgs) error {
+	pm := NewProgressManager([]*Step{
+		{ID: "check", Message: "Checking for updates", IndentLevel: 0},
+		{ID: "update", Message: "Updating...", IndentLevel: 0},
+		{ID: "brew-upgrade", Message: "Updating via Homebrew", IndentLevel: 1},
+		{ID: "download", Message: "Downloading latest CLI", IndentLevel: 1},
+		{ID: "install", Message: "Installing update", IndentLevel: 1},
+	}, WithProgressOutput(!args.NoProgress))
+
+	// 1. check CLI to see if update needed, if this fails then try update anyways
+	if err := pm.Start("check"); err != nil {
+		return err
+	}
+	latestVersion, latestVersionErr := latestVersion()
+	if latestVersionErr != nil {
+		warningf(cmd.Root().ErrWriter, "CLI Update Check: failed to get latest release information: %v", latestVersionErr)
+	}
+	localVersion, localVersionErr := localVersion()
+	if localVersionErr != nil {
+		warningf(cmd.Root().ErrWriter, "CLI Update Check: failed to get local release information: %v", localVersionErr)
+	}
+	if localVersion != nil && latestVersion != nil {
+		if localVersion.GreaterThanEqual(latestVersion) {
+			msg := fmt.Sprintf("Already up to date (version %s)", localVersion.Original())
+			if err := pm.CompleteWithMessage("check", msg); err != nil {
+				return err
+			}
+			if args.NoProgress {
+				infof(cmd.Root().Writer, msg)
+			}
+			return nil
+		}
+	}
+	checkMsg := "Update available"
+	if latestVersion != nil {
+		checkMsg = fmt.Sprintf("Update available: %s", latestVersion.Original())
+	}
+	if err := pm.CompleteWithMessage("check", checkMsg); err != nil {
+		return err
+	}
+
+	// 2. start the update parent step, which wraps all install work
+	if err := pm.Start("update"); err != nil {
+		return err
+	}
+	updatedMsg := "Updated successfully"
+	if latestVersion != nil {
+		updatedMsg = fmt.Sprintf("Updated to %s", latestVersion.Original())
+	}
+
+	// 3. check if cli managed by brew, if so attempt update. If it fails
+	// dont continue with binary replacement to avoid putting brew out of sync
+	if isViamManagedByBrew() {
+		if err := pm.Start("brew-upgrade"); err != nil {
+			return err
+		}
+		pm.UpdateText("  → Updating via Homebrew — do not cancel. To recover if deleted: brew reinstall viam")
+		updated, brewErr := tryBrewUpgrade()
+		if brewErr != nil {
+			if failErr := pm.Fail("brew-upgrade", brewErr); failErr != nil {
+				return failErr
+			}
+			return errors.Errorf("CLI update failed: %v", brewErr)
+		}
+		switch updated {
+		case brewUpdated:
+			if err := pm.CompleteWithMessage("brew-upgrade", "Updated via Homebrew"); err != nil {
+				return err
+			}
+			if err := pm.CompleteWithMessage("update", updatedMsg); err != nil {
+				return err
+			}
+			if args.NoProgress {
+				infof(cmd.Root().Writer, updatedMsg)
+			}
+			return nil
+		case brewNotAvailable:
+			const brewNotAvailableMsg = "Latest version not yet available on Homebrew, try again later"
+			if err := pm.FailWithMessage("update", brewNotAvailableMsg); err != nil {
+				return err
+			}
+			if args.NoProgress {
+				infof(cmd.Root().Writer, brewNotAvailableMsg)
+			}
+			return nil
+		}
+	}
+
+	// 4. get the local version binary path (use full path if no symlinks)
+	execPath, err := os.Executable()
+	if err != nil {
+		return errors.Errorf("CLI update failed: failed to get executable path: %v", err)
+	}
+	localBinaryPath, err := filepath.EvalSymlinks(execPath)
+	if err != nil {
+		localBinaryPath = execPath
+	}
+	directoryPath := filepath.Dir(localBinaryPath)
+
+	// 5. get the latest binary (from storage.googleapis.com) and write it into a temp file
+	if err := pm.Start("download"); err != nil {
+		return err
+	}
+	binaryURL := binaryURL()
+	latestBinaryPath, downloadErr := downloadBinaryIntoDir(binaryURL, directoryPath)
+	defer os.Remove(latestBinaryPath) //nolint:errcheck
+	if downloadErr != nil {
+		if failErr := pm.Fail("download", downloadErr); failErr != nil {
+			return failErr
+		}
+		return errors.Errorf("CLI update failed: failed to download binary: %v", downloadErr)
+	}
+	if err := pm.Complete("download"); err != nil {
+		return err
+	}
+
+	// 6. replace the old binary with the new one
+	if err := pm.Start("install"); err != nil {
+		return err
+	}
+	if err := replaceBinary(localBinaryPath, latestBinaryPath); err != nil {
+		if failErr := pm.Fail("install", err); failErr != nil {
+			return failErr
+		}
+		return errors.Errorf("CLI update failed: failed to replace binary: %v", err)
+	}
+	if err := pm.Complete("install"); err != nil {
+		return err
+	}
+
+	// 7. on Windows, ensure the CLI directory is in the user's PATH
+	if runtime.GOOS == osWindows {
+		if err := addToWindowsUserPATH(cmd, directoryPath); err != nil {
+			warningf(cmd.Root().ErrWriter, "Failed to add CLI to user PATH. "+
+				"To add manually, run the following in PowerShell:\n"+
+				`  [Environment]::SetEnvironmentVariable("Path", `+
+				`[Environment]::GetEnvironmentVariable("Path", "User") + ";%s", "User")`+
+				"\nThen restart your terminal for the change to take effect."+
+				"\nError: %v", directoryPath, err)
+		}
+	}
+	if err := pm.CompleteWithMessage("update", updatedMsg); err != nil {
+		return err
+	}
+	if args.NoProgress {
+		infof(cmd.Root().Writer, updatedMsg)
+	}
+	return nil
+}
+
+type brewUpdateResult int
+
+const (
+	brewUpdated brewUpdateResult = iota
+	brewNotAvailable
+)
+
+// isViamManagedByBrew reports whether the viam CLI is managed by Homebrew.
+func isViamManagedByBrew() bool {
+	if runtime.GOOS == osWindows {
+		return false
+	}
+	if _, err := exec.LookPath("brew"); err != nil {
+		return false
+	}
+	return exec.Command("brew", "list", "viam").Run() == nil
+}
+
+// tryBrewUpgrade attempts a Homebrew upgrade of viam. It should only be called
+// after confirming viam is brew-managed via isViamManagedByBrew.
+func tryBrewUpgrade() (brewUpdateResult, error) {
+	out, err := exec.Command("brew", "upgrade", "viam").CombinedOutput()
+	if err != nil {
+		return brewUpdated, errors.Errorf("failed to upgrade CLI via brew: %v", err)
+	}
+	if strings.Contains(string(out), "already installed") {
+		return brewNotAvailable, nil
+	}
+	return brewUpdated, nil
+}
+
+func binaryURL() string {
+	// Determine binary URL based on OS and architecture
+	binaryURL := "https://storage.googleapis.com/packages.viam.com/apps/viam-cli/viam-cli-stable-" +
+		runtime.GOOS + "-" + runtime.GOARCH
+	if runtime.GOOS == osWindows {
+		binaryURL += ".exe" //nolint:goconst
+	}
+	return binaryURL
+}
+
+func downloadBinaryIntoDir(binaryURL, directoryPath string) (string, error) {
+	// Download the binary
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, binaryURL, nil)
+	if err != nil {
+		return "", errors.Errorf("binary download failed: %v", err)
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return "", errors.Errorf("binary download failed: %v", err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		utils.UncheckedError(resp.Body.Close())
+		return "", errors.Errorf("binary download failed: server returned status %d", resp.StatusCode)
+	}
+
+	// create a temp file that we write the downloaded binary into
+	goos := runtime.GOOS
+	tempFileName := "viam-cli-update"
+	if goos == osWindows {
+		tempFileName += ".exe"
+	}
+	tempFileName += ".new"
+
+	// Create the temp file in the same directory as the binary
+	latestBinaryPath := filepath.Join(directoryPath, tempFileName)
+	latestBinaryFile, err := os.Create(latestBinaryPath) //nolint:gosec
+	if err != nil {
+		utils.UncheckedError(resp.Body.Close())
+		if os.IsPermission(err) {
+			if goos == osWindows {
+				return "", errors.New("permission denied: run PowerShell as Administrator")
+			}
+			return "", errors.New("permission denied: run 'sudo viam update'")
+		}
+		return "", errors.Errorf("failed to create temp file: %v", err)
+	}
+
+	// Write downloaded content to temp file
+	_, err = io.Copy(latestBinaryFile, resp.Body)
+	utils.UncheckedError(resp.Body.Close())
+	utils.UncheckedError(latestBinaryFile.Close())
+	if err != nil {
+		return "", errors.Errorf("failed to write downloaded binary: %v", err)
+	}
+
+	// Make executable on Unix-like systems, if permissions are improperly set then no
+	// change will be made and user has to run sudo
+	if goos != osWindows {
+		if err := os.Chmod(latestBinaryPath, 0o755); err != nil { //nolint:gosec
+			if os.IsPermission(err) {
+				return "", errors.New("permission denied: run 'sudo viam update'")
+			}
+			return "", errors.Errorf("failed to make binary executable: %v", err)
+		}
+	}
+	return latestBinaryPath, nil
+}
+
+func replaceBinary(localBinaryPath, latestBinaryPath string) error {
+	// On Windows, the running executable is locked and cannot be overwritten.
+	// However, it can be renamed, so move it out of the way first.
+	if runtime.GOOS == osWindows {
+		oldPath := localBinaryPath + ".old"
+		_ = os.Remove(oldPath) //nolint:errcheck
+		if err := os.Rename(localBinaryPath, oldPath); err != nil && !os.IsNotExist(err) {
+			if os.IsPermission(err) {
+				return errors.New("permission denied: run PowerShell as Administrator")
+			}
+			return errors.Errorf("failed to rename old binary: %v", err)
+		}
+	}
+	if err := os.Rename(latestBinaryPath, localBinaryPath); err != nil {
+		if os.IsPermission(err) {
+			if runtime.GOOS == osWindows {
+				return errors.New("permission denied: run PowerShell as Administrator")
+			}
+			return errors.New("permission denied: run 'sudo viam update'")
+		}
+		return errors.Errorf("failed to replace binary: %v", err)
+	}
+	return nil
+}
+
+// addToWindowsUserPATH reads the current user-level PATH from the Windows registry via PowerShell,
+// checks if binaryDir is already present, and appends it if not.
+func addToWindowsUserPATH(cmd *cli.Command, binaryDir string) error {
+	cleanDir := filepath.Clean(binaryDir)
+
+	// Read the current user-level PATH from the registry.
+	out, err := exec.Command("powershell", "-Command",
+		`[Environment]::GetEnvironmentVariable("Path", "User")`).Output()
+	if err != nil {
+		return errors.Errorf("failed to read user PATH: %v", err)
+	}
+	currentPath := strings.TrimSpace(string(out))
+
+	// Check if directory is already in PATH (case-insensitive on Windows).
+	for _, p := range strings.Split(currentPath, ";") {
+		if strings.EqualFold(filepath.Clean(strings.TrimSpace(p)), cleanDir) {
+			return nil
+		}
+	}
+
+	// Append our directory to PATH and write it back.
+	newPath := currentPath
+	if newPath != "" && !strings.HasSuffix(newPath, ";") {
+		newPath += ";"
+	}
+	newPath += cleanDir
+
+	//nolint:gosec
+	if err := exec.Command("powershell", "-Command",
+		fmt.Sprintf(`[Environment]::SetEnvironmentVariable("Path", "%s", "User")`,
+			strings.ReplaceAll(newPath, `"`, `\"`)),
+	).Run(); err != nil {
+		return errors.Errorf("failed to update user PATH: %v", err)
+	}
+
+	infof(cmd.Root().Writer, "Added %s to your user PATH. Restart your terminal to use 'viam' from anywhere.", cleanDir)
+	return nil
+}
+
+// VersionAction is the corresponding Action for 'version'.
+func VersionAction(ctx context.Context, cmd *cli.Command, args emptyArgs) error {
+	info, ok := debug.ReadBuildInfo()
+	if !ok {
+		return errors.New("error reading build info")
+	}
+	globalArgs, err := getGlobalArgs(cmd)
+	if err != nil {
+		return err
+	}
+	if globalArgs.Debug {
+		printf(cmd.Root().Writer, "%s", info.String())
+	}
+	settings := make(map[string]string, len(info.Settings))
+	for _, setting := range info.Settings {
+		settings[setting.Key] = setting.Value
+	}
+	version := "?"
+	if rev, ok := settings["vcs.revision"]; ok {
+		version = rev[:8]
+		if settings["vcs.modified"] == "true" {
+			version += "+"
+		}
+	}
+	deps := make(map[string]*debug.Module, len(info.Deps))
+	for _, dep := range info.Deps {
+		deps[dep.Path] = dep
+	}
+	apiVersion := "?"
+	if dep, ok := deps["go.viam.com/api"]; ok {
+		apiVersion = dep.Version
+	}
+
+	appVersion := rconfig.Version
+	if appVersion == "" {
+		appVersion = "(dev)"
+	}
+	printf(cmd.Root().Writer, "Version %s Git=%s API=%s", appVersion, version, apiVersion)
+	return nil
+}
+
+var defaultBaseURL = "https://app.viam.com:443"
+
+func isProdBaseURL(baseURL *url.URL) bool {
+	return strings.HasSuffix(baseURL.Hostname(), "viam.com")
+}
+
+// Creates a new viam client, defaulting to _not_ passing the `disableBrowerOpen` arg (which
+// users don't even have an option of setting for any CLI method currently except `Login`).
+func newViamClient(ctx context.Context, cmd *cli.Command) (*viamClient, error) {
+	client, err := newViamClientInner(ctx, cmd, false)
+	if err != nil {
+		return nil, err
+	}
+	if err := client.ensureLoggedIn(ctx); err != nil {
+		return nil, err
+	}
+	return client, nil
+}
+
+func isTLSLocalhost(url *url.URL) bool {
+	if url.Scheme != "https" || url.Port() == "443" {
+		return false
+	}
+	return strings.HasPrefix(url.Host, "0.0.0.0") || strings.HasPrefix(url.Host, "localhost")
+}
+
+func newViamClientInner(ctx context.Context, cmd *cli.Command, disableBrowserOpen bool) (*viamClient, error) {
+	baseURL, conf, err := getBaseURL(cmd)
+	if err != nil {
+		return nil, err
+	}
+	if isTLSLocalhost(baseURL) {
+		warningf(
+			cmd.Root().ErrWriter,
+			"you are trying to log into localhost with a TLS connection."+
+				" This will likely result in a hang; please try logging in to http localhost instead")
+	}
+
+	if err = conf.checkUpdate(cmd); err != nil {
+		warningf(cmd.Root().ErrWriter, "Failed to check for CLI updates: %w", err)
+	}
+
+	var authFlow *authFlow
+	if isProdBaseURL(baseURL) {
+		authFlow = newCLIAuthFlow(cmd.Root().Writer, disableBrowserOpen)
+	} else {
+		authFlow = newStgCLIAuthFlow(cmd.Root().Writer, disableBrowserOpen)
+	}
+
+	return &viamClient{
+		c:           cmd,
+		conf:        conf,
+		baseURL:     baseURL,
+		selectedOrg: &apppb.Organization{},
+		selectedLoc: &apppb.Location{},
+		authFlow:    authFlow,
+	}, nil
+}
+
+func getBaseURL(cmd *cli.Command) (*url.URL, *Config, error) {
+	globalArgs, err := getGlobalArgs(cmd)
+	if err != nil {
+		return nil, nil, err
+	}
+	conf, err := ConfigFromCache(cmd)
+	if err != nil {
+		if !os.IsNotExist(err) {
+			debugf(cmd.Root().Writer, globalArgs.Debug, "Cached config parse error: %v", err)
+		}
+		conf = &Config{}
+		whichProfile, _ := whichProfile(globalArgs)
+		if !globalArgs.DisableProfiles && whichProfile != nil {
+			conf.profile = *whichProfile
+		}
+	}
+
+	// If base URL was not specified, assume cached base URL. If no base URL is
+	// cached, assume default base URL.
+	baseURLArg := globalArgs.BaseURL
+	switch {
+	case conf.BaseURL == "" && baseURLArg == "":
+		conf.BaseURL = defaultBaseURL
+	case conf.BaseURL == "" && baseURLArg != "":
+		conf.BaseURL = baseURLArg
+	case baseURLArg != "" && conf.BaseURL != "" && conf.BaseURL != baseURLArg:
+		return nil, nil, fmt.Errorf("cached base URL for this session is %q. "+
+			"Please logout and login again to use provided base URL %q", conf.BaseURL, baseURLArg)
+	}
+
+	if conf.BaseURL != defaultBaseURL {
+		infof(cmd.Root().ErrWriter, "Using %q as base URL value", conf.BaseURL)
+	}
+	baseURL, _, err := rutils.ParseBaseURL(conf.BaseURL, true)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	return baseURL, conf, nil
+}
+
+func (c *viamClient) loadOrganizations(ctx context.Context) error {
+	resp, err := c.client.ListOrganizations(ctx, &apppb.ListOrganizationsRequest{})
+	if err != nil {
+		return err
+	}
+	c.orgs = &resp.Organizations
+	return nil
+}
+
+func (c *viamClient) selectOrganization(ctx context.Context, orgStr string) error {
+	if orgStr != "" && (c.selectedOrg.Id == orgStr || c.selectedOrg.Name == orgStr) {
+		return nil
+	}
+	c.orgs = nil
+	c.locs = nil
+
+	if err := c.loadOrganizations(ctx); err != nil {
+		return err
+	}
+	var orgIsID bool
+	if orgStr == "" {
+		if len(*c.orgs) == 0 {
+			return errors.New("no organizations to work with")
+		}
+		c.selectedOrg = (*c.orgs)[0]
+		return nil
+	} else if _, err := uuid.Parse(orgStr); err == nil {
+		orgIsID = true
+	}
+	var foundOrg *apppb.Organization
+	for _, org := range *c.orgs {
+		if orgIsID {
+			if org.Id == orgStr {
+				foundOrg = org
+				break
+			}
+			continue
+		}
+		if org.Name == orgStr {
+			foundOrg = org
+			break
+		}
+	}
+	if foundOrg == nil {
+		return errors.Errorf("no organization found for %q", orgStr)
+	}
+
+	c.selectedOrg = foundOrg
+	return nil
+}
+
+// getOrg gets an org by an indentifying string. If the orgStr is an
+// org UUID, then this matchs on organization ID, otherwise this will match
+// on organization name.
+func (c *viamClient) getOrg(ctx context.Context, orgStr string) (*apppb.Organization, error) {
+	resp, err := c.client.ListOrganizations(ctx, &apppb.ListOrganizationsRequest{})
+	if err != nil {
+		return nil, err
+	}
+	organizations := resp.GetOrganizations()
+	var orgIsID bool
+	if _, err := uuid.Parse(orgStr); err == nil {
+		orgIsID = true
+	}
+	for _, org := range organizations {
+		if orgIsID {
+			if org.Id == orgStr {
+				return org, nil
+			}
+		} else if org.Name == orgStr {
+			return org, nil
+		}
+	}
+	return nil, errors.Errorf("no organization found for %q", orgStr)
+}
+
+// getUserOrgByPublicNamespace searches the logged in users orgs to see
+// if any have a matching public namespace.
+func (c *viamClient) getUserOrgByPublicNamespace(ctx context.Context, publicNamespace string) (*apppb.Organization, error) {
+	if err := c.loadOrganizations(ctx); err != nil {
+		return nil, err
+	}
+	for _, org := range *c.orgs {
+		if org.PublicNamespace == publicNamespace {
+			return org, nil
+		}
+	}
+	return nil, errors.Errorf("none of your organizations have a public namespace of %q", publicNamespace)
+}
+
+func (c *viamClient) listOrganizations(ctx context.Context) ([]*apppb.Organization, error) {
+	if err := c.loadOrganizations(ctx); err != nil {
+		return nil, err
+	}
+	return (*c.orgs), nil
+}
+
+func (c *viamClient) loadLocations(ctx context.Context) error {
+	if c.selectedOrg.Id == "" {
+		return errors.New("must select organization first")
+	}
+	resp, err := c.client.ListLocations(ctx, &apppb.ListLocationsRequest{OrganizationId: c.selectedOrg.Id})
+	if err != nil {
+		return err
+	}
+	c.locs = &resp.Locations
+	return nil
+}
+
+func (c *viamClient) selectLocation(ctx context.Context, locStr string) error {
+	if locStr != "" && (c.selectedLoc.Id == locStr || c.selectedLoc.Name == locStr) {
+		return nil
+	}
+	c.locs = nil
+
+	if err := c.loadLocations(ctx); err != nil {
+		return err
+	}
+	if locStr == "" {
+		if len(*c.locs) == 0 {
+			return errors.New("no locations to work with")
+		}
+		c.selectedLoc = (*c.locs)[0]
+		return nil
+	}
+	var foundLocs []*apppb.Location
+	for _, loc := range *c.locs {
+		if loc.Id == locStr || loc.Name == locStr {
+			foundLocs = append(foundLocs, loc)
+			break
+		}
+	}
+	if len(foundLocs) == 0 {
+		return errors.Errorf("no location found for %q", locStr)
+	}
+	if len(foundLocs) != 1 {
+		return errors.Errorf("multiple locations match %q: %v", locStr, foundLocs)
+	}
+
+	c.selectedLoc = foundLocs[0]
+	return nil
+}
+
+func (c *viamClient) listLocations(ctx context.Context, orgID string) ([]*apppb.Location, error) {
+	if err := c.selectOrganization(ctx, orgID); err != nil {
+		return nil, err
+	}
+	if err := c.loadLocations(ctx); err != nil {
+		return nil, err
+	}
+	return (*c.locs), nil
+}
+
+func (c *viamClient) listRobots(ctx context.Context, orgStr, locStr string) ([]*apppb.Robot, error) {
+	if err := c.selectOrganization(ctx, orgStr); err != nil {
+		return nil, err
+	}
+	if err := c.selectLocation(ctx, locStr); err != nil {
+		return nil, err
+	}
+	resp, err := c.client.ListRobots(ctx, &apppb.ListRobotsRequest{
+		LocationId: c.selectedLoc.Id,
+	})
+	if err != nil {
+		return nil, err
+	}
+	return resp.Robots, nil
+}
+
+func (c *viamClient) robot(ctx context.Context, orgStr, locStr, robotStr string) (*apppb.Robot, error) {
+	robots, err := c.listRobots(ctx, orgStr, locStr)
+	if err != nil {
+		return nil, err
+	}
+	for _, robot := range robots {
+		if robot.Id == robotStr || robot.Name == robotStr {
+			return robot, nil
+		}
+	}
+
+	// check if the robot is a cloud robot using the ID
+	resp, err := c.client.GetRobot(ctx, &apppb.GetRobotRequest{
+		Id: robotStr,
+	})
+	if err != nil {
+		return nil, errors.Errorf("no machine found for %q", robotStr)
+	}
+
+	return resp.GetRobot(), nil
+}
+
+func (c *viamClient) robotPart(ctx context.Context, orgStr, locStr, robotStr, partStr string) (*apppb.RobotPart, error) {
+	part, err := c.robotPartInner(ctx, orgStr, locStr, robotStr, partStr)
+	if err == nil {
+		return part, nil
+	}
+
+	// if we still haven't found the part, it's possible no robotStr was passed. That's okay
+	// so long as the partStr was passed as an ID, so let's try to get the part with just that.
+	resp, err2 := c.getRobotPart(ctx, partStr)
+	if err2 == nil {
+		return resp.Part, nil
+	}
+
+	return nil, multierr.Combine(err, err2)
+}
+
+func (c *viamClient) robotPartInner(ctx context.Context, orgStr, locStr, robotStr, partStr string) (*apppb.RobotPart, error) {
+	parts, err := c.robotParts(ctx, orgStr, locStr, robotStr)
+	if err != nil {
+		return nil, err
+	}
+	for _, part := range parts {
+		if part.Id == partStr || part.Name == partStr {
+			return part, nil
+		}
+	}
+
+	// if we can't find the part via org/location, see if this is an id, and try to find it directly that way
+	if robotStr != "" {
+		resp, err := c.client.GetRobotParts(ctx, &apppb.GetRobotPartsRequest{
+			RobotId: robotStr,
+		})
+		if err != nil {
+			return nil, err
+		}
+		for _, part := range resp.Parts {
+			if part.Id == partStr || part.Name == partStr {
+				return part, nil
+			}
+		}
+		if partStr == "" && len(resp.Parts) == 1 {
+			return resp.Parts[0], nil
+		}
+	}
+
+	return nil, errors.Errorf("no machine part found for machine: %q part: %q", robotStr, partStr)
+}
+
+// getRobotPart wraps GetRobotPart API.
+// note: overlaps with viamClient.robotPart, which wraps GetRobotParts.
+// Use this variant if you don't know the robot ID.
+func (c *viamClient) getRobotPart(ctx context.Context, partID string) (*apppb.GetRobotPartResponse, error) {
+	return c.client.GetRobotPart(ctx, &apppb.GetRobotPartRequest{Id: partID})
+}
+
+func (c *viamClient) updateRobotPart(
+	ctx context.Context, part *apppb.RobotPart, confMap map[string]any, lastKnownUpdate *timestamppb.Timestamp,
+) error {
+	confStruct, err := structpb.NewStruct(confMap)
+	if err != nil {
+		return errors.Wrap(err, "in NewStruct")
+	}
+	req := apppb.UpdateRobotPartRequest{
+		Id:              part.Id,
+		Name:            part.Name,
+		RobotConfig:     confStruct,
+		LastKnownUpdate: lastKnownUpdate,
+	}
+	_, err = c.client.UpdateRobotPart(ctx, &req)
+	return err
+}
+
+func (c *viamClient) robotPartLogs(ctx context.Context, orgStr, locStr, robotStr, partStr string, errorsOnly bool,
+	numLogs int, start, end *timestamppb.Timestamp,
+) ([]*commonpb.LogEntry, error) {
+	part, err := c.robotPart(ctx, orgStr, locStr, robotStr, partStr)
+	if err != nil {
+		return nil, err
+	}
+
+	// Use page tokens to get batches of 100 up to numLogs and throw away any
+	// extra logs in last batch.
+	logs := make([]*commonpb.LogEntry, 0, numLogs)
+	var pageToken string
+	for i := 0; i < numLogs; {
+		resp, err := c.client.GetRobotPartLogs(ctx, &apppb.GetRobotPartLogsRequest{
+			Id:         part.Id,
+			ErrorsOnly: errorsOnly,
+			PageToken:  &pageToken,
+			Start:      start,
+			End:        end,
+		})
+		if err != nil {
+			return nil, err
+		}
+
+		pageToken = resp.NextPageToken
+		// Break in the event of no logs in GetRobotPartLogsResponse or when
+		// page token is empty (no more pages).
+		if resp.Logs == nil || pageToken == "" {
+			break
+		}
+
+		// Truncate this intermediate slice of resp.Logs based on how many logs
+		// are still required by numLogs.
+		remainingLogsNeeded := numLogs - i
+		if remainingLogsNeeded < len(resp.Logs) {
+			resp.Logs = resp.Logs[:remainingLogsNeeded]
+		}
+		logs = append(logs, resp.Logs...)
+
+		i += len(resp.Logs)
+	}
+
+	return logs, nil
+}
+
+func (c *viamClient) robotParts(ctx context.Context, orgStr, locStr, robotStr string) ([]*apppb.RobotPart, error) {
+	robot, err := c.robot(ctx, orgStr, locStr, robotStr)
+	if err != nil {
+		return nil, err
+	}
+	resp, err := c.client.GetRobotParts(ctx, &apppb.GetRobotPartsRequest{
+		RobotId: robot.Id,
+	})
+	if err != nil {
+		return nil, err
+	}
+	return resp.Parts, nil
+}
+
+func (c *viamClient) printRobotPartLogsInner(logs []*commonpb.LogEntry, indent string) {
+	// Iterate over logs in reverse because they are returned in
+	// order of latest to oldest but we should print from oldest -> newest
+	for i := len(logs) - 1; i >= 0; i-- {
+		log := logs[i]
+		fieldsString, err := logEntryFieldsToString(log.Fields)
+		if err != nil {
+			warningf(c.c.Root().ErrWriter, "%v", err)
+			fieldsString = ""
+		}
+		printf(
+			c.c.Root().Writer,
+			"%s%s\t%s\t%s\t%s\t%s",
+			indent,
+			log.Time.AsTime().Format(logging.DefaultTimeFormatStr),
+			log.Level,
+			log.LoggerName,
+			log.Message,
+			fieldsString,
+		)
+	}
+}
+
+func (c *viamClient) printRobotPartLogs(ctx context.Context, orgStr, locStr, robotStr, partStr string,
+	errorsOnly bool, indent, header string, numLogs int,
+	start, end *timestamppb.Timestamp,
+) error {
+	logs, err := c.robotPartLogs(ctx, orgStr, locStr, robotStr, partStr, errorsOnly, numLogs, start, end)
+	if err != nil {
+		return err
+	}
+
+	if header != "" {
+		printf(c.c.Root().Writer, header)
+	}
+	if len(logs) == 0 {
+		printf(c.c.Root().Writer, "%sNo recent logs", indent)
+		return nil
+	}
+	c.printRobotPartLogsInner(logs, indent)
+	return nil
+}
+
+// tailRobotPartLogs tails and prints logs for the given robot part.
+func (c *viamClient) tailRobotPartLogs(
+	ctx context.Context, orgStr, locStr, robotStr, partStr string, errorsOnly bool, indent, header string,
+) error {
+	part, err := c.robotPart(ctx, orgStr, locStr, robotStr, partStr)
+	if err != nil {
+		return err
+	}
+	tailClient, err := c.client.TailRobotPartLogs(ctx, &apppb.TailRobotPartLogsRequest{
+		Id:         part.Id,
+		ErrorsOnly: errorsOnly,
+	})
+	if err != nil {
+		return err
+	}
+
+	if header != "" {
+		printf(c.c.Root().Writer, header)
+	}
+
+	for {
+		resp, err := tailClient.Recv()
+		if err != nil {
+			if errors.Is(err, io.EOF) {
+				return nil
+			}
+			return err
+		}
+		c.printRobotPartLogsInner(resp.Logs, indent)
+	}
+}
+
+func (c *viamClient) runRobotPartCommand(
+	ctx context.Context,
+	orgStr, locStr, robotStr, partStr string,
+	svcMethod, data string,
+	streamDur time.Duration,
+	debug bool,
+	logger logging.Logger,
+) error {
+	dialCtx, fqdn, rpcOpts, err := c.prepareDial(ctx, orgStr, locStr, robotStr, partStr, debug)
+	if err != nil {
+		return err
+	}
+
+	conn, err := grpc.Dial(dialCtx, fqdn, logger, rpcOpts...)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		utils.UncheckedError(conn.Close())
+	}()
+
+	refCtx := metadata.NewOutgoingContext(ctx, nil)
+	refClient := grpcreflect.NewClientV1Alpha(refCtx, reflectpb.NewServerReflectionClient(conn))
+	reflSource := grpcurl.DescriptorSourceFromServer(ctx, refClient)
+	descSource := reflSource
+
+	options := grpcurl.FormatOptions{
+		EmitJSONDefaultFields: true,
+		IncludeTextSeparator:  true,
+		AllowUnknownFields:    true,
+	}
+
+	invoke := func() (bool, error) {
+		rf, formatter, err := grpcurl.RequestParserAndFormatter(
+			grpcurl.Format("json"),
+			descSource,
+			strings.NewReader(data),
+			options)
+		if err != nil {
+			return false, err
+		}
+
+		h := &grpcurl.DefaultEventHandler{
+			Out:            c.c.Root().Writer,
+			Formatter:      formatter,
+			VerbosityLevel: 0,
+		}
+
+		if err := grpcurl.InvokeRPC(
+			ctx,
+			descSource,
+			conn,
+			svcMethod,
+			nil,
+			h,
+			rf.Next,
+		); err != nil {
+			return false, err
+		}
+
+		if h.Status.Code() != codes.OK {
+			grpcurl.PrintStatus(c.c.Root().ErrWriter, h.Status, formatter)
+			cli.OsExiter(1)
+			return false, nil
+		}
+
+		return true, nil
+	}
+
+	if streamDur == 0 {
+		_, err := invoke()
+		return err
+	}
+
+	ticker := time.NewTicker(streamDur)
+	defer ticker.Stop()
+
+	for {
+		if err := ctx.Err(); err != nil {
+			if errors.Is(err, context.Canceled) {
+				return nil
+			}
+			return err
+		}
+
+		select {
+		case <-ctx.Done():
+			return nil
+		case <-ticker.C:
+			if ok, err := invoke(); err != nil {
+				return err
+			} else if !ok {
+				return nil
+			}
+		}
+	}
+}
+
+func (c *viamClient) connectToShellService(ctx context.Context, orgStr, locStr, robotStr, partStr string,
+	debug bool,
+	logger logging.Logger,
+) (shell.Service, func(ctx context.Context) error, error) {
+	dialCtx, fqdn, rpcOpts, err := c.prepareDial(ctx, orgStr, locStr, robotStr, partStr, debug)
+	if err != nil {
+		return nil, nil, err
+	}
+	return c.connectToShellServiceInner(ctx, dialCtx, fqdn, rpcOpts, debug, logger)
+}
+
+// connectToShellServiceFqdn is a shell service dialer that doesn't check org or re-fetch the part.
+func (c *viamClient) connectToShellServiceFqdn(
+	ctx context.Context,
+	partFqdn string,
+	debug bool,
+	logger logging.Logger,
+) (shell.Service, func(ctx context.Context) error, error) {
+	dialCtx, fqdn, rpcOpts, err := c.prepareDialInner(ctx, partFqdn, debug)
+	if err != nil {
+		return nil, nil, err
+	}
+	return c.connectToShellServiceInner(ctx, dialCtx, fqdn, rpcOpts, debug, logger)
+}
+
+func (c *viamClient) connectToRobot(
+	dialCtx context.Context,
+	fqdn string,
+	rpcOpts []rpc.DialOption,
+	debug bool,
+	logger logging.Logger,
+) (*client.RobotClient, error) {
+	if debug {
+		printf(c.c.Root().Writer, "Establishing connection...")
+	}
+	robotClient, err := client.New(dialCtx, fqdn, logger, client.WithDialOptions(rpcOpts...))
+	if err != nil {
+		return nil, errors.Wrap(err, "could not connect to machine part")
+	}
+	return robotClient, nil
+}
+
+func (c *viamClient) connectToShellServiceInner(
+	ctx context.Context,
+	dialCtx context.Context,
+	fqdn string,
+	rpcOpts []rpc.DialOption,
+	debug bool,
+	logger logging.Logger,
+) (shell.Service, func(ctx context.Context) error, error) {
+	robotClient, err := c.connectToRobot(dialCtx, fqdn, rpcOpts, debug, logger)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	var successful bool
+	defer func() {
+		if !successful {
+			utils.UncheckedError(robotClient.Close(ctx))
+		}
+	}()
+
+	// Returns the first shell service found in the robot resources
+	var found *resource.Name
+	for _, name := range robotClient.ResourceNames() {
+		if name.API == shell.API {
+			nameCopy := name
+			found = &nameCopy
+			break
+		}
+	}
+	if found == nil {
+		return nil, nil, errNoShellService
+	}
+
+	shellRes, err := robotClient.ResourceByName(*found)
+	if err != nil {
+		return nil, nil, errors.Wrap(err, "could not get shell service from machine part")
+	}
+
+	shellSvc, ok := shellRes.(shell.Service)
+	if !ok {
+		return nil, nil, errors.New("could not get shell service from machine part")
+	}
+	successful = true
+	return shellSvc, robotClient.Close, nil
+}
+
+func (c *viamClient) startRobotPartShell(
+	ctx context.Context,
+	orgStr, locStr, robotStr, partStr string,
+	debug bool,
+	logger logging.Logger,
+) error {
+	shellSvc, closeClient, err := c.connectToShellService(ctx, orgStr, locStr, robotStr, partStr, debug, logger)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		utils.UncheckedError(closeClient(ctx))
+	}()
+
+	getWinChMsg := func() map[string]interface{} {
+		cols, rows := consolesize.GetConsoleSize()
+		return map[string]interface{}{
+			"message": "window-change",
+			"cols":    cols,
+			"rows":    rows,
+		}
+	}
+
+	input, inputOOB, output, err := shellSvc.Shell(ctx, map[string]interface{}{
+		"messages": []interface{}{getWinChMsg()},
+	})
+	if err != nil {
+		return err
+	}
+
+	if sig, ok := sigwinchSignal(); ok {
+		winchCh := make(chan os.Signal, 1)
+		signal.Notify(winchCh, sig)
+		utils.PanicCapturingGo(func() {
+			defer close(inputOOB)
+			for {
+				if !utils.SelectContextOrWaitChan(ctx, winchCh) {
+					return
+				}
+				select {
+				case <-ctx.Done():
+					return
+				case inputOOB <- getWinChMsg():
+				}
+			}
+		})
+	}
+
+	setRaw := func(isRaw bool) error {
+		// NOTE(benjirewis): Linux systems seem to need both "raw" (no processing) and "-echo"
+		// (no echoing back inputted characters) in order to allow the input and output loops
+		// below to completely control the terminal.
+		args := []string{"raw", "-echo", "-echoctl"}
+		if !isRaw {
+			args = []string{"-raw", "echo", "echoctl"}
+		}
+
+		rawMode := exec.Command("stty", args...)
+		rawMode.Stdin = os.Stdin
+		return rawMode.Run()
+	}
+	if err := setRaw(true); err != nil {
+		return err
+	}
+	defer func() {
+		utils.UncheckedError(setRaw(false))
+	}()
+
+	utils.PanicCapturingGo(func() {
+		var data [64]byte
+		for {
+			select {
+			case <-ctx.Done():
+				close(input)
+				return
+			default:
+			}
+
+			n, err := os.Stdin.Read(data[:])
+			if err != nil {
+				close(input)
+				return
+			}
+			select {
+			case <-ctx.Done():
+				close(input)
+				return
+			case input <- string(data[:n]):
+			}
+		}
+	})
+
+	outputLoop := func() {
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case outputData, ok := <-output:
+				if ok {
+					if outputData.Output != "" {
+						fmt.Fprint(c.c.Root().Writer, outputData.Output) //nolint:errcheck // no newline
+					}
+					if outputData.Error != "" {
+						fmt.Fprint(c.c.Root().ErrWriter, outputData.Error) //nolint:errcheck // no newline
+					}
+					if outputData.EOF {
+						return
+					}
+				} else {
+					return
+				}
+			}
+		}
+	}
+
+	outputLoop()
+	return nil
+}
+
+// maxCopyAttempts is the number of times to retry copying files to a part before giving up.
+const maxCopyAttempts = 6
+
+// retryableCopy attempts to copy files to a part using the shell service with retries.
+// It handles progress manager updates for each attempt and provides helpful error messages.
+// The copyFunc parameter allows for mocking in tests.
+// returns number of attempts made in case it terminates early due to nonretryable error
+func (c *viamClient) retryableCopy(
+	cmd *cli.Command,
+	pm *ProgressManager,
+	copyFunc func() error,
+	isFrom bool,
+) (int, error) {
+	var hadPreviousFailure bool
+	var copyErr error
+
+	for attempt := 1; attempt <= maxCopyAttempts; attempt++ {
+		// If we had a previous failure, create a nested step for this retry
+		var attemptStepID string
+		if hadPreviousFailure {
+			attemptStepID = fmt.Sprintf("Attempt-%d", attempt)
+			attemptStep := &Step{
+				ID:           attemptStepID,
+				Message:      fmt.Sprintf("Attempt %d/%d...", attempt, maxCopyAttempts),
+				CompletedMsg: fmt.Sprintf("Attempt %d succeeded", attempt),
+				Status:       StepPending,
+				IndentLevel:  2, // Nested under "copy" which is at level 1
+			}
+			pm.steps = append(pm.steps, attemptStep)
+			pm.stepMap[attemptStepID] = attemptStep
+
+			if err := pm.Start(attemptStepID); err != nil {
+				return attempt, err
+			}
+		}
+
+		copyErr = copyFunc()
+
+		if copyErr == nil {
+			// Success! Complete the step if this was a retry
+			if attemptStepID != "" {
+				if err := pm.Complete(attemptStepID); err != nil {
+					return attempt, err
+				}
+			}
+			return attempt, nil
+		}
+
+		// Handle error
+		hadPreviousFailure = true
+
+		// Print special warning for invalid argument and permission denied errors (in addition to regular error)
+		if s, ok := status.FromError(copyErr); ok {
+			if s.Code() == codes.PermissionDenied {
+				if isFrom {
+					warningf(cmd.Root().ErrWriter, "RDK couldn't read the source files on the machine. "+
+						"Try copying from a path the RDK user can read (e.g., $HOME, /tmp), "+
+						"temporarily changing file permissions with 'chmod'.")
+				} else {
+					warningf(cmd.Root().ErrWriter, "RDK couldn't write to the default file copy destination. "+
+						"If you're running as non-root, try adding --home $HOME or --home /user/username to your CLI command. "+
+						"Alternatively, run the RDK as root.")
+				}
+				_ = pm.Fail(attemptStepID, copyErr) //nolint:errcheck
+				return attempt, copyErr
+			} else if s.Code() == codes.InvalidArgument {
+				warningf(cmd.Root().ErrWriter, "Copy failed with invalid argument: %s", copyErr.Error())
+				_ = pm.Fail(attemptStepID, copyErr) //nolint:errcheck
+				return attempt, copyErr
+			}
+		}
+
+		// Create a step for this failed attempt (so it shows in the output)
+		if attemptStepID == "" {
+			// First attempt - create its step retroactively
+			attemptStepID = "Attempt-1"
+			attemptStep := &Step{
+				ID:           attemptStepID,
+				Message:      fmt.Sprintf("Attempt 1/%d...", maxCopyAttempts),
+				CompletedMsg: "Attempt 1 succeeded",
+				Status:       StepPending,
+				IndentLevel:  2,
+			}
+			pm.steps = append(pm.steps, attemptStep)
+			pm.stepMap[attemptStepID] = attemptStep
+			if err := pm.Start(attemptStepID); err != nil {
+				return attempt, err
+			}
+		}
+
+		// Mark this attempt as failed (this will print the error on next line)
+		_ = pm.Fail(attemptStepID, copyErr) //nolint:errcheck
+	}
+
+	// All attempts failed - return the error from the copy function
+	return maxCopyAttempts, copyErr
+}
+
+func (c *viamClient) copyFilesToMachine(
+	ctx context.Context,
+	orgStr, locStr, robotStr, partStr string,
+	debug bool,
+	allowRecursion bool,
+	preserve bool,
+	paths []string,
+	destination string,
+	logger logging.Logger,
+	noProgress bool,
+) error {
+	shellSvc, closeClient, err := c.connectToShellService(ctx, orgStr, locStr, robotStr, partStr, debug, logger)
+	if err != nil {
+		return err
+	}
+	return c.copyFilesToMachineInner(ctx, shellSvc, closeClient, allowRecursion, preserve, paths, destination, noProgress)
+}
+
+// copyFilesToFqdn is a copyFilesToMachine variant that makes use of pre-fetched part FQDN.
+func (c *viamClient) copyFilesToFqdn(
+	ctx context.Context,
+	fqdn string,
+	debug bool,
+	allowRecursion bool,
+	preserve bool,
+	paths []string,
+	destination string,
+	logger logging.Logger,
+	noProgress bool,
+) error {
+	shellSvc, closeClient, err := c.connectToShellServiceFqdn(ctx, fqdn, debug, logger)
+	if err != nil {
+		return err
+	}
+	return c.copyFilesToMachineInner(ctx, shellSvc, closeClient, allowRecursion, preserve, paths, destination, noProgress)
+}
+
+// copyFilesToMachineInner is the common logic for both copyFiles variants.
+func (c *viamClient) copyFilesToMachineInner(
+	ctx context.Context,
+	shellSvc shell.Service,
+	closeClient func(ctx context.Context) error,
+	allowRecursion bool,
+	preserve bool,
+	paths []string,
+	destination string,
+	noProgress bool,
+) error {
+	defer func() {
+		utils.UncheckedError(closeClient(ctx))
+	}()
+
+	if noProgress {
+		// prepare a factory that understands the file copying service (RPC or not).
+		copyFactory := shell.NewCopyFileToMachineFactory(destination, preserve, shellSvc)
+		// make a reader copier that just does the traversal and copy work for us. Think of
+		// this as a tee reader.
+		readCopier, err := shell.NewLocalFileReadCopier(paths, allowRecursion, false, copyFactory)
+		if err != nil {
+			return err
+		}
+		defer func() {
+			if err := readCopier.Close(ctx); err != nil {
+				utils.UncheckedError(err)
+			}
+		}()
+
+		// ReadAll the files into the copier.
+		return readCopier.ReadAll(ctx)
+	}
+
+	// Calculate total size of all files to be copied
+	var totalSize int64
+	for _, path := range paths {
+		info, err := os.Stat(path)
+		if err != nil {
+			return err
+		}
+		if info.IsDir() && allowRecursion {
+			err := filepath.Walk(path, func(path string, info os.FileInfo, err error) error {
+				if err != nil {
+					return err
+				}
+				if !info.IsDir() {
+					totalSize += info.Size()
+				}
+				return nil
+			})
+			if err != nil {
+				return err
+			}
+		} else if !info.IsDir() {
+			totalSize += info.Size()
+		}
+	}
+
+	// Create a progress tracking function
+	var currentFile string
+	progressFunc := func(bytes int64, file string, fileSize int64) {
+		if file != currentFile {
+			if currentFile != "" {
+				//nolint:errcheck // progress display is non-critical
+				_, _ = os.Stdout.WriteString("\n")
+			}
+			currentFile = file
+			//nolint:errcheck // progress display is non-critical
+			_, _ = os.Stdout.WriteString(fmt.Sprintf("Copying %s...\n", file))
+		}
+		uploadPercent := int(math.Ceil(100 * float64(bytes) / float64(fileSize)))
+		//nolint:errcheck // progress display is non-critical
+		_, _ = os.Stdout.WriteString(fmt.Sprintf("\rProgress: %d%% (%d/%d bytes)", uploadPercent, bytes, fileSize))
+	}
+
+	// Wrap the copy factory to track progress
+	progressFactory := &progressTrackingFactory{
+		factory:    shell.NewCopyFileToMachineFactory(destination, preserve, shellSvc),
+		onProgress: progressFunc,
+	}
+
+	// Create a new read copier with the progress tracking factory
+	readCopier, err := shell.NewLocalFileReadCopier(paths, allowRecursion, false, progressFactory)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		if err := readCopier.Close(ctx); err != nil {
+			utils.UncheckedError(err)
+		}
+	}()
+
+	// ReadAll the files into the copier.
+	err = readCopier.ReadAll(ctx)
+	return err
+}
+
+// progressTrackingFactory wraps a copy factory to track progress.
+type progressTrackingFactory struct {
+	factory    shell.FileCopyFactory
+	onProgress func(int64, string, int64)
+}
+
+func (ptf *progressTrackingFactory) MakeFileCopier(ctx context.Context, sourceType shell.CopyFilesSourceType) (shell.FileCopier, error) {
+	copier, err := ptf.factory.MakeFileCopier(ctx, sourceType)
+	if err != nil {
+		return nil, err
+	}
+	return &progressTrackingCopier{
+		copier:     copier,
+		onProgress: ptf.onProgress,
+	}, nil
+}
+
+// progressTrackingCopier wraps a file copier to track progress.
+type progressTrackingCopier struct {
+	copier     shell.FileCopier
+	onProgress func(int64, string, int64)
+}
+
+func (ptc *progressTrackingCopier) Copy(ctx context.Context, file shell.File) error {
+	// Get file size
+	info, err := file.Data.Stat()
+	if err != nil {
+		return err
+	}
+	fileSize := info.Size()
+
+	// Create a progress tracking reader
+	progressReader := &progressReader{
+		reader:     file.Data,
+		onProgress: ptc.onProgress,
+		fileName:   file.RelativeName,
+		fileSize:   fileSize,
+	}
+
+	// Create a new file with the progress tracking reader
+	progressFile := shell.File{
+		RelativeName: file.RelativeName,
+		Data:         progressReader,
+	}
+
+	return ptc.copier.Copy(ctx, progressFile)
+}
+
+func (ptc *progressTrackingCopier) Close(ctx context.Context) error {
+	//nolint:errcheck // progress display is non-critical
+	_, _ = os.Stdout.WriteString("\n")
+	return ptc.copier.Close(ctx)
+}
+
+// progressReader wraps a reader to track progress.
+type progressReader struct {
+	reader     fs.File
+	onProgress func(int64, string, int64)
+	copied     int64
+	fileName   string
+	fileSize   int64
+}
+
+func (pr *progressReader) Read(p []byte) (int, error) {
+	n, err := pr.reader.Read(p)
+	if n > 0 {
+		pr.copied += int64(n)
+		pr.onProgress(pr.copied, pr.fileName, pr.fileSize)
+	}
+	return n, err
+}
+
+func (pr *progressReader) Stat() (fs.FileInfo, error) {
+	return pr.reader.Stat()
+}
+
+func (pr *progressReader) Close() error {
+	return pr.reader.Close()
+}
+
+func (c *viamClient) copyFilesFromMachine(
+	ctx context.Context,
+	orgStr, locStr, robotStr, partStr string,
+	debug bool,
+	allowRecursion bool,
+	preserve bool,
+	paths []string,
+	destination string,
+	logger logging.Logger,
+) error {
+	shellSvc, closeClient, err := c.connectToShellService(ctx, orgStr, locStr, robotStr, partStr, debug, logger)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		utils.UncheckedError(closeClient(ctx))
+	}()
+
+	// prepare a factory that understands how to work with our local filesystem.
+	factory, err := shell.NewLocalFileCopyFactory(destination, preserve, false)
+	if err != nil {
+		return err
+	}
+
+	// let the shell service figure out how to grab the files for and pass them to our copier.
+	return shellSvc.CopyFilesFromMachine(ctx, paths, allowRecursion, preserve, factory, nil)
+}
+
+func logEntryFieldsToString(fields []*structpb.Struct) (string, error) {
+	// if there are no fields, don't return anything, otherwise we add lots of {}'s
+	// to the logs
+	if len(fields) == 0 {
+		return "", nil
+	}
+	// we have to manually format these fields as json because
+	// marshalling a go object will not preserve the order of the fields
+	message := "{"
+	for i, field := range fields {
+		key, value, err := logging.FieldKeyAndValueFromProto(field)
+		if err != nil {
+			return "", err
+		}
+		if i > 0 {
+			// split fields with space and comma after first entry
+			message += ", "
+		}
+		if _, isStr := value.(string); isStr {
+			message += fmt.Sprintf("%q: %q", key, value)
+		} else {
+			message += fmt.Sprintf("%q: %v", key, value)
+		}
+	}
+	return message + "}", nil
+}
+
+type readOAuthAppArgs struct {
+	OrgID    string
+	ClientID string
+}
+
+const (
+	clientAuthenticationPrefix = "CLIENT_AUTHENTICATION_"
+	pkcePrefix                 = "PKCE_"
+	urlValidationPrefix        = "URL_VALIDATION_"
+	enabledGrantPrefix         = "ENABLED_GRANT_"
+)
+
+// ReadOAuthAppAction is the corresponding action for 'organizations auth-service oauth-app read'.
+func ReadOAuthAppAction(ctx context.Context, cmd *cli.Command, args readOAuthAppArgs) error {
+	client, err := newViamClient(ctx, cmd)
+	if err != nil {
+		return err
+	}
+
+	if args.OrgID == "" {
+		return errors.New("must provide an organization ID to read OAuth app")
+	}
+
+	return client.readOAuthAppAction(ctx, cmd, args.OrgID, args.ClientID)
+}
+
+func (c *viamClient) readOAuthAppAction(ctx context.Context, cmd *cli.Command, orgID, clientID string) error {
+	req := &apppb.ReadOAuthAppRequest{OrgId: orgID, ClientId: clientID}
+	resp, err := c.client.ReadOAuthApp(ctx, req)
+	if err != nil {
+		return err
+	}
+
+	config := resp.OauthConfig
+	printf(cmd.Root().Writer, "OAuth config for client ID %s:", clientID)
+	printf(cmd.Root().Writer, "")
+	printf(cmd.Root().Writer, "Client Name: %s", resp.ClientName)
+	printf(cmd.Root().Writer, "Client Authentication: %s", formatStringForOutput(config.ClientAuthentication.String(),
+		clientAuthenticationPrefix))
+	printf(cmd.Root().Writer, "PKCE (Proof Key for Code Exchange): %s", formatStringForOutput(config.Pkce.String(), pkcePrefix))
+	printf(cmd.Root().Writer, "URL Validation Policy: %s", formatStringForOutput(config.UrlValidation.String(), urlValidationPrefix))
+	printf(cmd.Root().Writer, "Logout URL: %s", config.LogoutUri)
+	if config.InviteRedirectUri != "" {
+		printf(cmd.Root().Writer, "Invite Redirect URL: %s", config.InviteRedirectUri)
+	}
+	printf(cmd.Root().Writer, "Redirect URLs: %s", strings.Join(config.RedirectUris, ", "))
+	if len(config.OriginUris) > 0 {
+		printf(cmd.Root().Writer, "Origin URLs: %s", strings.Join(config.OriginUris, ", "))
+	}
+
+	var enabledGrants []string
+	for _, eg := range config.GetEnabledGrants() {
+		enabledGrants = append(enabledGrants, formatStringForOutput(eg.String(), enabledGrantPrefix))
+	}
+	printf(cmd.Root().Writer, "Enabled Grants: %s", strings.Join(enabledGrants, ", "))
+
+	return nil
+}
+
+type deleteOAuthAppArgs struct {
+	OrgID    string
+	ClientID string
+}
+
+// DeleteOAuthAppConfirmation is the Before action for 'organizations auth-service oauth-app delete'.
+// It asks for the user to confirm that they want to delete the oauth app.
+func DeleteOAuthAppConfirmation(ctx context.Context, cmd *cli.Command, args deleteOAuthAppArgs) error {
+	if args.OrgID == "" {
+		return errors.New("cannot delete oauth app without an organization ID")
+	}
+
+	if args.ClientID == "" {
+		return errors.New("cannot delete oauth app without a client ID")
+	}
+
+	printf(cmd.Root().Writer, yellow, "WARNING!!\n")
+	printf(cmd.Root().Writer, yellow, fmt.Sprintf("You are trying to delete an OAuth application with client ID %s. "+
+		"Once deleted, any existing apps that rely on this OAuth application will no longer be able to authenticate users.\n", args.ClientID))
+	printf(cmd.Root().Writer, yellow, "If you wish to continue, please type \"delete\":")
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+
+	rawInput, err := bufio.NewReader(cmd.Root().Reader).ReadString('\n')
+	if err != nil {
+		return err
+	}
+
+	input := strings.ToUpper(strings.TrimSpace(rawInput))
+	if input != "DELETE" {
+		return errors.New("aborted")
+	}
+	return nil
+}
+
+// DeleteOAuthAppAction is the corresponding action for 'oauth-app delete'.
+func DeleteOAuthAppAction(ctx context.Context, cmd *cli.Command, args deleteOAuthAppArgs) error {
+	client, err := newViamClient(ctx, cmd)
+	if err != nil {
+		return err
+	}
+
+	return client.deleteOAuthAppAction(ctx, cmd, args.OrgID, args.ClientID)
+}
+
+func (c *viamClient) deleteOAuthAppAction(ctx context.Context, cmd *cli.Command, orgID, clientID string) error {
+	req := &apppb.DeleteOAuthAppRequest{
+		OrgId:    orgID,
+		ClientId: clientID,
+	}
+
+	_, err := c.client.DeleteOAuthApp(ctx, req)
+	if err != nil {
+		return err
+	}
+
+	printf(cmd.Root().Writer, "Successfully deleted OAuth application")
+	return nil
+}
+
+type pkce string
+
+// the valid pkce values.
+const (
+	PKCEUnspecified                              pkce = "unspecified"
+	PKCERequired                                 pkce = "required"
+	PKCENotRequired                              pkce = "not_required"
+	PKCENotRequiredWhenUsingClientAuthentication pkce = "not_required_when_using_client_authentication"
+)
+
+func pkceToProto(stringPKCE string) (apppb.PKCE, error) {
+	switch pkce(stringPKCE) {
+	case PKCENotRequired:
+		return apppb.PKCE_PKCE_NOT_REQUIRED, nil
+	case PKCERequired:
+		return apppb.PKCE_PKCE_REQUIRED, nil
+	case PKCENotRequiredWhenUsingClientAuthentication:
+		return apppb.PKCE_PKCE_NOT_REQUIRED_WHEN_USING_CLIENT_AUTHENTICATION, nil
+	case PKCEUnspecified:
+		return apppb.PKCE_PKCE_UNSPECIFIED, nil
+	}
+	return apppb.PKCE_PKCE_UNSPECIFIED, errors.Errorf("--%s must be a valid PKCE, got %s. "+
+		"See `viam organizations auth-service oauth-app update --help` for supported options",
+		oauthAppFlagPKCE, stringPKCE)
+}
+
+type clientAuthentication string
+
+// the valid client authentication values.
+const (
+	ClientAuthenticationUnspecified              clientAuthentication = "unspecified"
+	ClientAuthenticationRequired                 clientAuthentication = "required"
+	ClientAuthenticationNotRequired              clientAuthentication = "not_required"
+	ClientAuthenticationNotRequiredWhenUsingPKCE clientAuthentication = "not_required_when_using_pkce"
+)
+
+func clientAuthToProto(clientAuth string) (apppb.ClientAuthentication, error) {
+	switch clientAuthentication(clientAuth) {
+	case ClientAuthenticationNotRequired:
+		return apppb.ClientAuthentication_CLIENT_AUTHENTICATION_NOT_REQUIRED, nil
+	case ClientAuthenticationRequired:
+		return apppb.ClientAuthentication_CLIENT_AUTHENTICATION_REQUIRED, nil
+	case ClientAuthenticationNotRequiredWhenUsingPKCE:
+		return apppb.ClientAuthentication_CLIENT_AUTHENTICATION_NOT_REQUIRED_WHEN_USING_PKCE, nil
+	case ClientAuthenticationUnspecified:
+		return apppb.ClientAuthentication_CLIENT_AUTHENTICATION_UNSPECIFIED, nil
+	}
+	return apppb.ClientAuthentication_CLIENT_AUTHENTICATION_UNSPECIFIED, errors.Errorf("--%s must be a valid ClientAuthentication, got %s. "+
+		"See `viam organizations auth-service oauth-app update --help` for supported options",
+		oauthAppFlagClientAuthentication, clientAuth)
+}
+
+type urlValidation string
+
+// the accepted url validation values.
+const (
+	URLValidationUnspecified    urlValidation = "unspecified"
+	URLValidationExactMatch     urlValidation = "exact_match"
+	URLValidationAllowWildcards urlValidation = "allow_wildcards"
+)
+
+func urlValidationToProto(urlValid string) (apppb.URLValidation, error) {
+	switch urlValidation(urlValid) {
+	case URLValidationAllowWildcards:
+		return apppb.URLValidation_URL_VALIDATION_ALLOW_WILDCARDS, nil
+	case URLValidationExactMatch:
+		return apppb.URLValidation_URL_VALIDATION_EXACT_MATCH, nil
+	case URLValidationUnspecified:
+		return apppb.URLValidation_URL_VALIDATION_UNSPECIFIED, nil
+	}
+	return apppb.URLValidation_URL_VALIDATION_UNSPECIFIED, errors.Errorf("--%s must be a valid UrlValidation, got %s. "+
+		"See `viam organizations auth-service oauth-app update --help` for supported options",
+		oauthAppFlagURLValidation, urlValid)
+}
+
+type enabledGrant string
+
+// the accepted enabled grant values.
+const (
+	EnabledGrantUnspecified       enabledGrant = "unspecified"
+	EnabledGrantAuthorizationCode enabledGrant = "authorization_code"
+	EnabledGrantImplicit          enabledGrant = "implicit"
+	EnabledGrantPassword          enabledGrant = "password"
+	EnabledGrantRefreshToken      enabledGrant = "refresh_token"
+	EnabledGrantDeviceCode        enabledGrant = "device_code"
+)
+
+func enabledGrantToProto(eg string) (apppb.EnabledGrant, error) {
+	switch enabledGrant(eg) {
+	case EnabledGrantAuthorizationCode:
+		return apppb.EnabledGrant_ENABLED_GRANT_AUTHORIZATION_CODE, nil
+	case EnabledGrantImplicit:
+		return apppb.EnabledGrant_ENABLED_GRANT_IMPLICIT, nil
+	case EnabledGrantPassword:
+		return apppb.EnabledGrant_ENABLED_GRANT_PASSWORD, nil
+	case EnabledGrantRefreshToken:
+		return apppb.EnabledGrant_ENABLED_GRANT_REFRESH_TOKEN, nil
+	case EnabledGrantDeviceCode:
+		return apppb.EnabledGrant_ENABLED_GRANT_DEVICE_CODE, nil
+	case EnabledGrantUnspecified:
+		return apppb.EnabledGrant_ENABLED_GRANT_UNSPECIFIED, nil
+	}
+	return apppb.EnabledGrant_ENABLED_GRANT_UNSPECIFIED, errors.Errorf("%s must consist of valid EnabledGrants, got %s. "+
+		"See `viam organizations auth-service oauth-app update --help` for supported options",
+		oauthAppFlagEnabledGrants, eg)
+}
+
+type createOAuthAppArgs struct {
+	OrgID                string
+	ClientName           string
+	ClientAuthentication string
+	Pkce                 string
+	LogoutURI            string
+	InviteRedirectURI    string
+	UrlValidation        string //nolint:revive,stylecheck
+	OriginURIs           []string
+	RedirectURIs         []string
+	EnabledGrants        []string
+}
+
+// CreateOAuthAppAction is the corresponding action for 'oauth-app create'.
+func CreateOAuthAppAction(ctx context.Context, cmd *cli.Command, args createOAuthAppArgs) error {
+	client, err := newViamClient(ctx, cmd)
+	if err != nil {
+		return err
+	}
+
+	if args.OrgID == "" {
+		return errors.New("must provide an organization ID to create an OAuth app")
+	}
+
+	return client.createOAuthAppAction(ctx, cmd, args)
+}
+
+func (c *viamClient) createOAuthAppAction(ctx context.Context, cmd *cli.Command, args createOAuthAppArgs) error {
+	config, err := generateOAuthConfig(args.ClientAuthentication, args.Pkce, args.UrlValidation,
+		args.LogoutURI, args.InviteRedirectURI, args.OriginURIs, args.RedirectURIs, args.EnabledGrants)
+	if err != nil {
+		return err
+	}
+
+	req := &apppb.CreateOAuthAppRequest{
+		OrgId:       args.OrgID,
+		ClientName:  args.ClientName,
+		OauthConfig: config,
+	}
+
+	response, err := c.client.CreateOAuthApp(ctx, req)
+	if err != nil {
+		return err
+	}
+
+	printf(cmd.Root().Writer, "Successfully created OAuth app %s with client ID %s and client secret %s",
+		args.ClientName, response.ClientId, response.ClientSecret)
+	return nil
+}
+
+type updateOAuthAppArgs struct {
+	OrgID                string
+	ClientID             string
+	ClientName           string
+	ClientAuthentication string
+	Pkce                 string
+	LogoutURI            string
+	InviteRedirectURI    string
+	UrlValidation        string //nolint:revive,stylecheck
+	OriginURIs           []string
+	RedirectURIs         []string
+	EnabledGrants        []string
+}
+
+// UpdateOAuthAppAction is the corresponding action for 'oauth-app update'.
+func UpdateOAuthAppAction(ctx context.Context, cmd *cli.Command, args updateOAuthAppArgs) error {
+	client, err := newViamClient(ctx, cmd)
+	if err != nil {
+		return err
+	}
+
+	return client.updateOAuthAppAction(ctx, cmd, args)
+}
+
+func (c *viamClient) updateOAuthAppAction(ctx context.Context, cmd *cli.Command, args updateOAuthAppArgs) error {
+	req, err := createUpdateOAuthAppRequest(args)
+	if err != nil {
+		return err
+	}
+
+	_, err = c.client.UpdateOAuthApp(ctx, req)
+	if err != nil {
+		return err
+	}
+
+	printf(cmd.Root().Writer, "Successfully updated OAuth app %s", args.ClientID)
+	return nil
+}
+
+func generateOAuthConfig(clientAuthentication, pkce, urlValidation, logoutURI,
+	inviteRedirectURI string, originURIs, redirectURIs, enabledGrants []string,
+) (*apppb.OAuthConfig, error) {
+	clientAuthProto, err := clientAuthToProto(clientAuthentication)
+	if err != nil {
+		return nil, err
+	}
+	pkceProto, err := pkceToProto(pkce)
+	if err != nil {
+		return nil, err
+	}
+
+	urlValidationProto, err := urlValidationToProto(urlValidation)
+	if err != nil {
+		return nil, err
+	}
+
+	egProto, err := enabledGrantsToProto(enabledGrants)
+	if err != nil {
+		return nil, err
+	}
+
+	return &apppb.OAuthConfig{
+		ClientAuthentication: clientAuthProto,
+		Pkce:                 pkceProto,
+		UrlValidation:        urlValidationProto,
+		OriginUris:           originURIs,
+		RedirectUris:         redirectURIs,
+		InviteRedirectUri:    inviteRedirectURI,
+		LogoutUri:            logoutURI,
+		EnabledGrants:        egProto,
+	}, nil
+}
+
+func createUpdateOAuthAppRequest(args updateOAuthAppArgs) (*apppb.UpdateOAuthAppRequest, error) {
+	if args.OrgID == "" {
+		return nil, errors.New("must provide an organization ID to update OAuth app")
+	}
+	orgID := args.OrgID
+	clientID := args.ClientID
+	clientName := args.ClientName
+
+	oauthConfig, err := generateOAuthConfig(args.ClientAuthentication, args.Pkce, args.UrlValidation,
+		args.LogoutURI, args.InviteRedirectURI, args.OriginURIs, args.RedirectURIs, args.EnabledGrants)
+	if err != nil {
+		return nil, err
+	}
+	req := &apppb.UpdateOAuthAppRequest{
+		OrgId:       orgID,
+		ClientId:    clientID,
+		ClientName:  clientName,
+		OauthConfig: oauthConfig,
+	}
+	return req, nil
+}
+
+func enabledGrantsToProto(enabledGrants []string) ([]apppb.EnabledGrant, error) {
+	if enabledGrants == nil {
+		return nil, nil
+	}
+	var enabledGrantsProto []apppb.EnabledGrant
+	for _, eg := range enabledGrants {
+		enabledGrant, err := enabledGrantToProto(eg)
+		if err != nil {
+			return nil, err
+		}
+		enabledGrantsProto = append(enabledGrantsProto, enabledGrant)
+	}
+	return enabledGrantsProto, nil
+}

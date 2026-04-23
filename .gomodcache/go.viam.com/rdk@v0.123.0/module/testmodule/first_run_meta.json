@@ -1,0 +1,30 @@
+{
+  "module_id": "acme:testmodule",
+  "visibility": "public",
+  "url": "",
+  "description": "Viam Test Module",
+  "models": [
+    {
+      "api": "rdk:component:generic",
+      "model": "rdk:test:helper"
+    },
+    {
+      "api": "rdk:component:generic",
+      "model": "rdk:test:slow"
+    },
+    {
+      "api": "rdk:service:generic",
+      "model": "rdk:test:other"
+    },
+    {
+      "api": "rdk:component:motor",
+      "model": "rdk:test:motor"
+    },
+    {
+      "api": "rdk:component:generic",
+      "model": "rdk:test:fsdep"
+    }
+  ],
+  "entrypoint": "./testmodule",
+  "first_run": "first_run.sh"
+}

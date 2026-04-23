@@ -1,0 +1,2107 @@
+syntax = "proto3";
+
+package viam.app.v1;
+
+import "app/mltraining/v1/ml_training.proto";
+import "app/packages/v1/packages.proto";
+import "common/v1/common.proto";
+import "google/protobuf/struct.proto";
+import "google/protobuf/timestamp.proto";
+import "tagger/v1/tagger.proto";
+
+option go_package = "go.viam.com/api/app/v1";
+
+service AppService {
+  // Users
+
+  // Get the id of the user with the email
+  rpc GetUserIDByEmail(GetUserIDByEmailRequest) returns (GetUserIDByEmailResponse);
+
+  // Organizations
+
+  // Create a new organization
+  rpc CreateOrganization(CreateOrganizationRequest) returns (CreateOrganizationResponse);
+
+  // List organizations
+  rpc ListOrganizations(ListOrganizationsRequest) returns (ListOrganizationsResponse);
+
+  // Get all organizations that have access to a location.
+  rpc GetOrganizationsWithAccessToLocation(GetOrganizationsWithAccessToLocationRequest) returns (GetOrganizationsWithAccessToLocationResponse);
+
+  // List the organizations a user belongs to
+  rpc ListOrganizationsByUser(ListOrganizationsByUserRequest) returns (ListOrganizationsByUserResponse);
+
+  // Search organizations by a couple fields
+  rpc SearchOrganizations(SearchOrganizationsRequest) returns (SearchOrganizationsResponse);
+
+  // Get an organization
+  rpc GetOrganization(GetOrganizationRequest) returns (GetOrganizationResponse);
+
+  // Checks for namespace availablity throughout all orgs.
+  rpc GetOrganizationNamespaceAvailability(GetOrganizationNamespaceAvailabilityRequest) returns (GetOrganizationNamespaceAvailabilityResponse);
+
+  // Update an organization
+  rpc UpdateOrganization(UpdateOrganizationRequest) returns (UpdateOrganizationResponse);
+
+  // Update an organization's namespace if it's already been set.
+  rpc UpdateOrganizationNamespace(UpdateOrganizationNamespaceRequest) returns (UpdateOrganizationNamespaceResponse);
+
+  // Delete an organization
+  rpc DeleteOrganization(DeleteOrganizationRequest) returns (DeleteOrganizationResponse);
+
+  // Get user-defined metadata for an organization
+  rpc GetOrganizationMetadata(GetOrganizationMetadataRequest) returns (GetOrganizationMetadataResponse);
+
+  // Update user-defined metadata for an organization
+  rpc UpdateOrganizationMetadata(UpdateOrganizationMetadataRequest) returns (UpdateOrganizationMetadataResponse);
+
+  // List all members of an organization and all invited members to the organization.
+  rpc ListOrganizationMembers(ListOrganizationMembersRequest) returns (ListOrganizationMembersResponse);
+
+  // Create an organization invite to an organization
+  rpc CreateOrganizationInvite(CreateOrganizationInviteRequest) returns (CreateOrganizationInviteResponse);
+
+  // Update the authorizations attached to an organization invite
+  rpc UpdateOrganizationInviteAuthorizations(UpdateOrganizationInviteAuthorizationsRequest) returns (UpdateOrganizationInviteAuthorizationsResponse);
+
+  // Delete an organization member from an organization
+  rpc DeleteOrganizationMember(DeleteOrganizationMemberRequest) returns (DeleteOrganizationMemberResponse);
+
+  // Delete an organization invite
+  rpc DeleteOrganizationInvite(DeleteOrganizationInviteRequest) returns (DeleteOrganizationInviteResponse);
+
+  // Resend an organization invite
+  rpc ResendOrganizationInvite(ResendOrganizationInviteRequest) returns (ResendOrganizationInviteResponse);
+
+  // Third party
+
+  rpc EnableBillingService(EnableBillingServiceRequest) returns (EnableBillingServiceResponse);
+
+  rpc DisableBillingService(DisableBillingServiceRequest) returns (DisableBillingServiceResponse);
+
+  rpc UpdateBillingService(UpdateBillingServiceRequest) returns (UpdateBillingServiceResponse);
+
+  rpc GetBillingServiceConfig(GetBillingServiceConfigRequest) returns (GetBillingServiceConfigResponse);
+
+  rpc OrganizationSetSupportEmail(OrganizationSetSupportEmailRequest) returns (OrganizationSetSupportEmailResponse);
+
+  rpc OrganizationGetSupportEmail(OrganizationGetSupportEmailRequest) returns (OrganizationGetSupportEmailResponse);
+
+  rpc OrganizationSetLogo(OrganizationSetLogoRequest) returns (OrganizationSetLogoResponse);
+  rpc OrganizationGetLogo(OrganizationGetLogoRequest) returns (OrganizationGetLogoResponse);
+
+  rpc EnableAuthService(EnableAuthServiceRequest) returns (EnableAuthServiceResponse);
+  rpc DisableAuthService(DisableAuthServiceRequest) returns (DisableAuthServiceResponse);
+
+  rpc CreateOAuthApp(CreateOAuthAppRequest) returns (CreateOAuthAppResponse);
+  rpc ReadOAuthApp(ReadOAuthAppRequest) returns (ReadOAuthAppResponse);
+  rpc UpdateOAuthApp(UpdateOAuthAppRequest) returns (UpdateOAuthAppResponse);
+  rpc DeleteOAuthApp(DeleteOAuthAppRequest) returns (DeleteOAuthAppResponse);
+  rpc ListOAuthApps(ListOAuthAppsRequest) returns (ListOAuthAppsResponse);
+
+  // Location
+
+  // Create a location
+  rpc CreateLocation(CreateLocationRequest) returns (CreateLocationResponse);
+
+  // Get a location
+  rpc GetLocation(GetLocationRequest) returns (GetLocationResponse);
+
+  // Update a location
+  rpc UpdateLocation(UpdateLocationRequest) returns (UpdateLocationResponse);
+
+  // Delete a location
+  rpc DeleteLocation(DeleteLocationRequest) returns (DeleteLocationResponse);
+
+  // Get user-defined metadata for a location
+  rpc GetLocationMetadata(GetLocationMetadataRequest) returns (GetLocationMetadataResponse);
+
+  // Update user-defined metadata for a location
+  rpc UpdateLocationMetadata(UpdateLocationMetadataRequest) returns (UpdateLocationMetadataResponse);
+
+  // Get a list of locations
+  rpc ListLocations(ListLocationsRequest) returns (ListLocationsResponse);
+
+  // Share a location with an organization
+  rpc ShareLocation(ShareLocationRequest) returns (ShareLocationResponse);
+
+  // Stop sharing a location with an organization
+  rpc UnshareLocation(UnshareLocationRequest) returns (UnshareLocationResponse);
+
+  // Get a location's authorization secrets
+  rpc LocationAuth(LocationAuthRequest) returns (LocationAuthResponse);
+
+  // Create a new generated Secret in the Location.
+  //  - Succeeds if there are no more than 2 active secrets after creation.
+  rpc CreateLocationSecret(CreateLocationSecretRequest) returns (CreateLocationSecretResponse);
+
+  // Delete a Secret from the Location.
+  rpc DeleteLocationSecret(DeleteLocationSecretRequest) returns (DeleteLocationSecretResponse);
+
+  // Get a specific robot by ID
+  rpc GetRobot(GetRobotRequest) returns (GetRobotResponse);
+
+  // Get user-defined metadata for a robot
+  rpc GetRobotMetadata(GetRobotMetadataRequest) returns (GetRobotMetadataResponse);
+
+  // Update user-defined metadata for an robot
+  rpc UpdateRobotMetadata(UpdateRobotMetadataRequest) returns (UpdateRobotMetadataResponse);
+
+  // Get Rover Rental Location Robots
+  rpc GetRoverRentalRobots(GetRoverRentalRobotsRequest) returns (GetRoverRentalRobotsResponse);
+
+  rpc GetRobotParts(GetRobotPartsRequest) returns (GetRobotPartsResponse);
+
+  // Get a specific robot part by ID
+  rpc GetRobotPart(GetRobotPartRequest) returns (GetRobotPartResponse);
+
+  // Get a specific robot part by name and location
+  rpc GetRobotPartByNameAndLocation(GetRobotPartByNameAndLocationRequest) returns (GetRobotPartByNameAndLocationResponse);
+
+  rpc GetRobotPartLogs(GetRobotPartLogsRequest) returns (GetRobotPartLogsResponse);
+
+  rpc TailRobotPartLogs(TailRobotPartLogsRequest) returns (stream TailRobotPartLogsResponse);
+
+  // Get a specific robot part histy by ID
+  rpc GetRobotPartHistory(GetRobotPartHistoryRequest) returns (GetRobotPartHistoryResponse);
+
+  // Update a robot
+  rpc UpdateRobotPart(UpdateRobotPartRequest) returns (UpdateRobotPartResponse);
+
+  // Create a new robot part
+  rpc NewRobotPart(NewRobotPartRequest) returns (NewRobotPartResponse);
+
+  // Delete a robot part
+  rpc DeleteRobotPart(DeleteRobotPartRequest) returns (DeleteRobotPartResponse);
+
+  // Get user-defined metadata for a robot part
+  rpc GetRobotPartMetadata(GetRobotPartMetadataRequest) returns (GetRobotPartMetadataResponse);
+
+  // Update user-defined metadata for an robot part
+  rpc UpdateRobotPartMetadata(UpdateRobotPartMetadataRequest) returns (UpdateRobotPartMetadataResponse);
+
+  // Gets the Robot API Keys for the robot
+  rpc GetRobotAPIKeys(GetRobotAPIKeysRequest) returns (GetRobotAPIKeysResponse);
+
+  // Marks the given part as the main part, and all the others as not
+  rpc MarkPartAsMain(MarkPartAsMainRequest) returns (MarkPartAsMainResponse);
+
+  // Marks part for restart. Once the robot part checks-in with the app the flag
+  // is reset on the robot part. Calling this multiple times before a robot part
+  // checks-in has no affect.
+  // Note: This API may be removed in the near future.
+  // TODO(APP-388): Remove
+  rpc MarkPartForRestart(MarkPartForRestartRequest) returns (MarkPartForRestartResponse);
+
+  // Create a new generated Secret in the Robot Part.
+  //  - Succeeds if there are no more than 2 active secrets after creation.
+  rpc CreateRobotPartSecret(CreateRobotPartSecretRequest) returns (CreateRobotPartSecretResponse);
+
+  // Delete a Secret from the RobotPart.
+  rpc DeleteRobotPartSecret(DeleteRobotPartSecretRequest) returns (DeleteRobotPartSecretResponse);
+
+  // Get a list of robots at a location
+  rpc ListRobots(ListRobotsRequest) returns (ListRobotsResponse);
+
+  // Get a list of robots at multiple locations
+  rpc ListRobotsForLocations(ListRobotsForLocationsRequest) returns (ListRobotsForLocationsResponse);
+
+  // Get a list of robots at an org
+  rpc ListRobotsForOrg(ListRobotsForOrgRequest) returns (ListRobotsForOrgResponse);
+
+  // NewRobot creates a new robot
+  rpc NewRobot(NewRobotRequest) returns (NewRobotResponse);
+
+  // UpdateRobot updates a robot
+  rpc UpdateRobot(UpdateRobotRequest) returns (UpdateRobotResponse);
+
+  // DeleteRobot deletes a robot
+  rpc DeleteRobot(DeleteRobotRequest) returns (DeleteRobotResponse);
+
+  // Fragments
+
+  // Gets a list of fragments
+  rpc ListFragments(ListFragmentsRequest) returns (ListFragmentsResponse);
+
+  // Gets a single fragment
+  rpc GetFragment(GetFragmentRequest) returns (GetFragmentResponse);
+
+  // Creates a fragment
+  rpc CreateFragment(CreateFragmentRequest) returns (CreateFragmentResponse);
+
+  // Updates a fragment
+  rpc UpdateFragment(UpdateFragmentRequest) returns (UpdateFragmentResponse);
+
+  // Deletes a fragment
+  rpc DeleteFragment(DeleteFragmentRequest) returns (DeleteFragmentResponse);
+
+  // List nested fragments for a fragment
+  rpc ListNestedFragments(ListNestedFragmentsRequest) returns (ListNestedFragmentsResponse);
+
+  // Gets top level and nested fragments for a machine, as well as any other specified fragment ids
+  rpc ListMachineFragments(ListMachineFragmentsRequest) returns (ListMachineFragmentsResponse);
+
+  // List all machines and their corresponding machine dashboard information
+  rpc ListMachineSummaries(ListMachineSummariesRequest) returns (ListMachineSummariesResponse);
+
+  // Gets fragment history
+  rpc GetFragmentHistory(GetFragmentHistoryRequest) returns (GetFragmentHistoryResponse);
+
+  // Gets usage for a fragment across versions
+  rpc GetFragmentUsage(GetFragmentUsageRequest) returns (GetFragmentUsageResponse);
+
+  // Sets a fragment tag to a revision
+  rpc SetFragmentTag(SetFragmentTagRequest) returns (SetFragmentTagResponse);
+
+  // Deletes a fragment tag
+  rpc DeleteFragmentTag(DeleteFragmentTagRequest) returns (DeleteFragmentTagResponse);
+
+  // Creates an IdentityAuthorization
+  rpc AddRole(AddRoleRequest) returns (AddRoleResponse);
+
+  // Deletes an IdentityAuthorization
+  rpc RemoveRole(RemoveRoleRequest) returns (RemoveRoleResponse);
+
+  // Changes an IdentityAuthorization to a new IdentityAuthorization
+  rpc ChangeRole(ChangeRoleRequest) returns (ChangeRoleResponse);
+
+  // Returns all authorization roles for a given resource
+  rpc ListAuthorizations(ListAuthorizationsRequest) returns (ListAuthorizationsResponse);
+
+  // Validates a permission for the current user
+  rpc CheckPermissions(CheckPermissionsRequest) returns (CheckPermissionsResponse);
+
+  rpc GetRegistryItem(GetRegistryItemRequest) returns (GetRegistryItemResponse);
+
+  rpc CreateRegistryItem(CreateRegistryItemRequest) returns (CreateRegistryItemResponse);
+
+  rpc UpdateRegistryItem(UpdateRegistryItemRequest) returns (UpdateRegistryItemResponse);
+
+  rpc ListRegistryItems(ListRegistryItemsRequest) returns (ListRegistryItemsResponse);
+
+  rpc DeleteRegistryItem(DeleteRegistryItemRequest) returns (DeleteRegistryItemResponse);
+
+  rpc RenameRegistryItem(RenameRegistryItemRequest) returns (RenameRegistryItemResponse);
+
+  rpc TransferRegistryItem(TransferRegistryItemRequest) returns (TransferRegistryItemResponse);
+
+  rpc CreateModule(CreateModuleRequest) returns (CreateModuleResponse);
+
+  rpc UpdateModule(UpdateModuleRequest) returns (UpdateModuleResponse);
+
+  rpc UploadModuleFile(stream UploadModuleFileRequest) returns (UploadModuleFileResponse);
+
+  rpc GetModule(GetModuleRequest) returns (GetModuleResponse);
+
+  rpc ListModules(ListModulesRequest) returns (ListModulesResponse);
+
+  rpc CreateKey(CreateKeyRequest) returns (CreateKeyResponse);
+
+  rpc DeleteKey(DeleteKeyRequest) returns (DeleteKeyResponse);
+
+  rpc ListKeys(ListKeysRequest) returns (ListKeysResponse);
+
+  rpc RenameKey(RenameKeyRequest) returns (RenameKeyResponse);
+
+  rpc RotateKey(RotateKeyRequest) returns (RotateKeyResponse);
+
+  rpc CreateKeyFromExistingKeyAuthorizations(CreateKeyFromExistingKeyAuthorizationsRequest) returns (CreateKeyFromExistingKeyAuthorizationsResponse);
+
+  rpc GetAppContent(GetAppContentRequest) returns (GetAppContentResponse);
+
+  rpc GetAppBranding(GetAppBrandingRequest) returns (GetAppBrandingResponse);
+
+  // Upload a device push token for the user.
+  rpc UploadDevicePushToken(UploadDevicePushTokenRequest) returns (UploadDevicePushTokenResponse);
+
+  // Delete a device push token for the user.
+  rpc DeleteDevicePushToken(DeleteDevicePushTokenRequest) returns (DeleteDevicePushTokenResponse);
+
+  // Gets all device push tokens for the user for the given app ID.
+  rpc GetDevicePushTokens(GetDevicePushTokensRequest) returns (GetDevicePushTokensResponse);
+
+  // Set the Firebase config JSON for a specific app id.
+  rpc SetFirebaseConfig(SetFirebaseConfigRequest) returns (SetFirebaseConfigResponse);
+
+  // Read the app ID for an organization.
+  // This returns only the app_id configured for the org, not the Firebase config JSON.
+  rpc GetFirebaseConfig(GetFirebaseConfigRequest) returns (GetFirebaseConfigResponse);
+
+  // Deletes a Firebase config JSON for a specific app id.
+  rpc DeleteFirebaseConfig(DeleteFirebaseConfigRequest) returns (DeleteFirebaseConfigResponse);
+}
+
+enum OnlineState {
+  ONLINE_STATE_UNSPECIFIED = 0;
+  ONLINE_STATE_ONLINE = 1;
+  ONLINE_STATE_OFFLINE = 2;
+  ONLINE_STATE_AWAITING_SETUP = 3;
+}
+
+message Robot {
+  string id = 1 [(tagger.v1.tags) = "bson:\"_id\" json:\"id,omitempty\""];
+  string name = 2 [(tagger.v1.tags) = "bson:\"name\" json:\"name\""];
+  string location = 3 [(tagger.v1.tags) = "bson:\"location\" json:\"location\""];
+  google.protobuf.Timestamp last_access = 4 [(tagger.v1.tags) = "bson:\"last_access\" json:\"last_access\""];
+  google.protobuf.Timestamp created_on = 5 [(tagger.v1.tags) = "bson:\"created_on\""];
+  OnlineState online_state = 6 [(tagger.v1.tags) = "bson:\"online_state\" json:\"online_state,omitempty\""];
+  int64 seconds_since_online = 7 [(tagger.v1.tags) = "bson:\"seconds_since_online\" json:\"seconds_since_online,omitempty\""];
+}
+
+message RobotPart {
+  string id = 1 [(tagger.v1.tags) = "bson:\"_id\" json:\"id,omitempty\""];
+  string name = 2 [(tagger.v1.tags) = "bson:\"name\" json:\"name\""];
+  // dns_name part name used for fqdn and local fqdn. Anytime the Name is updated this should be sanitized and updated as well.
+  string dns_name = 10 [(tagger.v1.tags) = "bson:\"dns_name\" json:\"dns_name\""];
+  string secret = 3 [(tagger.v1.tags) = "bson:\"secret\" json:\"secret,omitempty\""];
+  string robot = 4 [(tagger.v1.tags) = "bson:\"robot\" json:\"robot\""];
+  // Store the location_id to allow for unique indexes across parts and locations. This filed MUST be updated each time the robots location
+  // changes.
+  string location_id = 12 [(tagger.v1.tags) = "bson:\"location_id\" json:\"-\""];
+  google.protobuf.Struct robot_config = 5 [(tagger.v1.tags) = "bson:\"config\" json:\"robot_config\""];
+  google.protobuf.Timestamp last_access = 6 [(tagger.v1.tags) = "bson:\"last_access\" json:\"last_access\""];
+  google.protobuf.Struct user_supplied_info = 7 [(tagger.v1.tags) = "bson:\"user_supplied_info\" json:\"user_supplied_info\""];
+  bool main_part = 8 [(tagger.v1.tags) = "bson:\"main_part\" json:\"main_part\""];
+  string fqdn = 9;
+  string local_fqdn = 11;
+  google.protobuf.Timestamp created_on = 13 [(tagger.v1.tags) = "bson:\"created_on\""];
+
+  // List of secrets allowed for authentication.
+  repeated SharedSecret secrets = 14 [(tagger.v1.tags) = "bson:\"secrets\""];
+  // latest timestamp when a robot part was updated
+  google.protobuf.Timestamp last_updated = 15 [(tagger.v1.tags) = "bson:\"last_updated_at\""];
+  OnlineState online_state = 16 [(tagger.v1.tags) = "bson:\"online_state\" json:\"online_state,omitempty\""];
+  int64 seconds_since_online = 17 [(tagger.v1.tags) = "bson:\"seconds_since_online\" json:\"seconds_since_online,omitempty\""];
+  // robot_config_json is the raw JSON string of the robot config, preserving user-defined key order.
+  optional string robot_config_json = 18 [(tagger.v1.tags) = "bson:\"config_json,omitempty\" json:\"config_json,omitempty\""];
+}
+
+message RobotPartHistoryEntry {
+  string part = 1 [(tagger.v1.tags) = "bson:\"part\" json:\"part\""];
+  string robot = 2 [(tagger.v1.tags) = "bson:\"robot\" json:\"robot\""];
+  google.protobuf.Timestamp when = 3 [(tagger.v1.tags) = "bson:\"when\" json:\"when\""];
+  RobotPart old = 4 [(tagger.v1.tags) = "bson:\"old\" json:\"old\""];
+  AuthenticatorInfo edited_by = 5 [(tagger.v1.tags) = "bson:\"edited_by\" json:\"edited_by\""];
+}
+
+message AuthenticatorInfo {
+  AuthenticationType type = 1;
+  string value = 2;
+  bool is_deactivated = 3;
+}
+
+enum AuthenticationType {
+  AUTHENTICATION_TYPE_UNSPECIFIED = 0;
+  AUTHENTICATION_TYPE_WEB_OAUTH = 1;
+  AUTHENTICATION_TYPE_API_KEY = 2;
+  AUTHENTICATION_TYPE_ROBOT_PART_SECRET = 3;
+  AUTHENTICATION_TYPE_LOCATION_SECRET = 4;
+}
+
+message ListOrganizationsRequest {}
+
+message Organization {
+  string id = 1;
+  string name = 2;
+  google.protobuf.Timestamp created_on = 3;
+  string public_namespace = 4;
+  // GCS region of the organization. Locations created under this org will have their GCS region set to this by default and packages
+  // associated with this org will be stored in this region.
+  string default_region = 5;
+  optional string cid = 6;
+  optional FragmentImportList default_fragments = 7;
+}
+
+message OrganizationMember {
+  string user_id = 1;
+  repeated string emails = 2;
+  google.protobuf.Timestamp date_added = 3;
+  optional google.protobuf.Timestamp last_login = 4;
+  optional google.protobuf.Timestamp last_access = 5;
+}
+
+message ListOrganizationsResponse {
+  repeated Organization organizations = 1;
+}
+
+message OrganizationInvite {
+  string organization_id = 1;
+  string email = 2;
+  google.protobuf.Timestamp created_on = 3;
+  repeated Authorization authorizations = 4;
+}
+
+message CreateOrganizationRequest {
+  string name = 1;
+}
+
+message CreateOrganizationResponse {
+  Organization organization = 1;
+}
+
+message GetOrganizationRequest {
+  string organization_id = 1;
+}
+
+message GetOrganizationResponse {
+  Organization organization = 1;
+}
+
+message GetOrganizationNamespaceAvailabilityRequest {
+  string public_namespace = 1;
+  string organization_id = 2;
+}
+
+message GetOrganizationNamespaceAvailabilityResponse {
+  bool available = 1;
+}
+
+message FragmentImportList {
+  repeated FragmentImport fragments = 1;
+}
+
+message UpdateOrganizationRequest {
+  string organization_id = 1;
+  optional string name = 2;
+  optional string public_namespace = 3;
+  // The new GCS region to associate the org with.
+  optional string region = 4;
+  optional string cid = 5;
+  optional FragmentImportList default_fragments = 6;
+}
+
+message UpdateOrganizationResponse {
+  Organization organization = 1;
+}
+
+message UpdateOrganizationNamespaceRequest {
+  string organization_id = 1;
+  string new_public_namespace = 2;
+}
+
+message UpdateOrganizationNamespaceResponse {
+  Organization organization = 1;
+}
+
+message DeleteOrganizationRequest {
+  string organization_id = 1;
+}
+
+message DeleteOrganizationResponse {}
+
+message GetOrganizationMetadataRequest {
+  string organization_id = 1;
+}
+
+message GetOrganizationMetadataResponse {
+  google.protobuf.Struct data = 1;
+}
+
+message UpdateOrganizationMetadataRequest {
+  string organization_id = 1;
+  google.protobuf.Struct data = 2;
+}
+
+message UpdateOrganizationMetadataResponse {}
+
+message ListOrganizationMembersRequest {
+  string organization_id = 1;
+}
+
+message ListOrganizationMembersResponse {
+  string organization_id = 1;
+  repeated OrganizationMember members = 2;
+  repeated OrganizationInvite invites = 3;
+}
+
+message CreateOrganizationInviteRequest {
+  string organization_id = 1;
+  string email = 2;
+  repeated Authorization authorizations = 3;
+  // Set to true (the default) to send an email to the recipient of an invite. The user must accept the email to be added to the associated authorizations.
+  // When set to false, the user automatically receives the associated authorization on the next login of the user with the associated email address.
+  optional bool send_email_invite = 4;
+}
+
+message CreateOrganizationInviteResponse {
+  OrganizationInvite invite = 1;
+}
+
+message UpdateOrganizationInviteAuthorizationsRequest {
+  string organization_id = 1;
+  string email = 2;
+  repeated Authorization add_authorizations = 3;
+  repeated Authorization remove_authorizations = 4;
+}
+
+message UpdateOrganizationInviteAuthorizationsResponse {
+  OrganizationInvite invite = 1;
+}
+
+message DeleteOrganizationInviteRequest {
+  string organization_id = 1;
+  string email = 2;
+}
+
+message DeleteOrganizationInviteResponse {}
+
+message ResendOrganizationInviteRequest {
+  string organization_id = 1;
+  string email = 2;
+  // Set to true (the default) to send an email to the recipient of an invite. The user must accept the email to be added to the associated authorizations.
+  // When set to false, the user automatically receives the associated authorization on the next login of the user with the associated email address.
+  optional bool send_email_invite = 3;
+}
+
+message ResendOrganizationInviteResponse {
+  OrganizationInvite invite = 1;
+}
+
+message DeleteOrganizationMemberRequest {
+  string organization_id = 1;
+  string user_id = 2;
+}
+
+message DeleteOrganizationMemberResponse {}
+
+// Third Party Org Services
+
+message BillingAddress {
+  string address_line_1 = 1;
+  optional string address_line_2 = 2;
+  string city = 3;
+  string state = 4;
+  string zipcode = 5;
+  string country = 6;
+}
+
+message EnableBillingServiceRequest {
+  string org_id = 1;
+  BillingAddress billing_address = 2;
+}
+
+message EnableBillingServiceResponse {}
+
+message UpdateBillingServiceRequest {
+  string org_id = 1;
+  BillingAddress billing_address = 2;
+}
+
+message UpdateBillingServiceResponse {}
+
+message GetBillingServiceConfigRequest {
+  string org_id = 1;
+}
+
+message GetBillingServiceConfigResponse {
+  BillingAddress billing_address = 1;
+  string support_email = 2;
+  string logo_url = 3;
+  string billing_dashboard_url = 4;
+}
+
+message DisableBillingServiceRequest {
+  string org_id = 1;
+}
+
+message DisableBillingServiceResponse {}
+
+message OrganizationSetSupportEmailRequest {
+  string org_id = 1;
+  string email = 2;
+}
+message OrganizationSetSupportEmailResponse {}
+
+message OrganizationGetSupportEmailRequest {
+  string org_id = 1;
+}
+
+message OrganizationGetSupportEmailResponse {
+  string email = 1;
+}
+
+// Location
+//
+
+// Used for rendering an organization's information on the frontend (limited
+// to id, name, or both).
+message OrganizationIdentity {
+  // Organization ID.
+  string id = 1;
+  // Organization name.
+  string name = 2;
+}
+
+message LocationOrganization {
+  // Organization ID the location is shared with.
+  string organization_id = 1;
+  // Whether the organization is the primary owner or not.
+  bool primary = 2;
+}
+
+message LocationAuth {
+  // Deprecated: use secrets field.
+  string secret = 1 [deprecated = true];
+
+  // Location ID containing this LocationAuth.
+  string location_id = 2;
+
+  // List of secrets used to authenticate to the Location.
+  repeated SharedSecret secrets = 3;
+}
+
+message StorageConfig {
+  // GCS region that data is stored in.
+  string region = 1;
+}
+
+message Location {
+  // Location ID.
+  string id = 1;
+  // Location name.
+  string name = 2;
+  // Location ID of the parent location.
+  string parent_location_id = 4;
+  // Location authentication secrets.
+  LocationAuth auth = 5;
+  // Organizations that the location is shared with.
+  repeated LocationOrganization organizations = 6;
+  // Location creation timestamp.
+  google.protobuf.Timestamp created_on = 3;
+  //
+  int32 robot_count = 7;
+  // Config for how data in this location is stored.
+  StorageConfig config = 8;
+  // The organization that is the primary owner of the location.
+  optional OrganizationIdentity primary_org_identity = 9;
+}
+
+// SharedSecret is a secret used for LocationAuth and RobotParts.
+message SharedSecret {
+  enum State {
+    STATE_UNSPECIFIED = 0;
+    // Secret is enabled and can be used in authentication.
+    STATE_ENABLED = 1;
+    // Secret is disabled and must not be used to authenticate to rpc.
+    STATE_DISABLED = 2;
+  }
+
+  string id = 1 [(tagger.v1.tags) = "bson:\"id\""];
+
+  // The payload of the secret. Used during authentication to the rpc framework.
+  string secret = 2 [(tagger.v1.tags) = "bson:\"secret\""];
+
+  // Date/time the secret was first created.
+  google.protobuf.Timestamp created_on = 3 [(tagger.v1.tags) = "bson:\"created_on\" json:\"created_on\""];
+
+  // State of the shared secret. In most cases it should be enabled. We may support
+  // disabling a specific secret while keeping it in the database.
+  State state = 4 [(tagger.v1.tags) = "bson:\"state\""];
+}
+
+message CreateLocationRequest {
+  // Organization ID to create the location under.
+  string organization_id = 1;
+  // Name of the location.
+  string name = 2;
+  // The new parent location to move the location under.
+  optional string parent_location_id = 3;
+}
+
+message CreateLocationResponse {
+  // Location object is returned.
+  Location location = 1;
+}
+
+message GetLocationRequest {
+  // Location ID of location to get.
+  string location_id = 1;
+}
+
+message GetLocationResponse {
+  // Location object is returned.
+  Location location = 1;
+}
+
+message UpdateLocationRequest {
+  // Location ID of location to update.
+  string location_id = 1;
+  // The new name to be updated on location.
+  optional string name = 2;
+  // The new parent location to move the location under.
+  optional string parent_location_id = 3;
+  // The new GCS region to associate the location with.
+  optional string region = 4;
+}
+
+message UpdateLocationResponse {
+  // Location object is returned.
+  Location location = 1;
+}
+
+message DeleteLocationRequest {
+  // Location ID of location to delete.
+  string location_id = 1;
+}
+
+message DeleteLocationResponse {}
+
+message GetLocationMetadataRequest {
+  string location_id = 1;
+}
+
+message GetLocationMetadataResponse {
+  google.protobuf.Struct data = 1;
+}
+
+message UpdateLocationMetadataRequest {
+  string location_id = 1;
+  google.protobuf.Struct data = 2;
+}
+
+message UpdateLocationMetadataResponse {}
+
+message GetOrganizationsWithAccessToLocationRequest {
+  string location_id = 1;
+}
+
+message GetOrganizationsWithAccessToLocationResponse {
+  repeated OrganizationIdentity organization_identities = 1;
+}
+
+message ListLocationsRequest {
+  // Organization ID under which to list all locations.
+  string organization_id = 1;
+}
+
+message ShareLocationRequest {
+  // Location ID to be shared.
+  string location_id = 1;
+  // Organization ID to share the location with.
+  string organization_id = 2;
+}
+
+message ShareLocationResponse {}
+
+message UnshareLocationRequest {
+  // Location ID to be unshared.
+  string location_id = 1;
+  // Organization ID to unshare the location with.
+  string organization_id = 2;
+}
+
+message UnshareLocationResponse {}
+
+message ListLocationsResponse {
+  repeated Location locations = 1;
+}
+
+message CreateLocationSecretRequest {
+  // Location ID to create the secret in.
+  string location_id = 1;
+}
+
+message CreateLocationSecretResponse {
+  // Location's auth after updates.
+  LocationAuth auth = 1;
+}
+
+message DeleteLocationSecretRequest {
+  string location_id = 1;
+  string secret_id = 2;
+}
+message DeleteLocationSecretResponse {}
+
+message LocationAuthRequest {
+  string location_id = 1;
+}
+
+message LocationAuthResponse {
+  LocationAuth auth = 1;
+}
+
+message GetRobotRequest {
+  string id = 1;
+}
+
+message GetRoverRentalRobotsRequest {
+  string org_id = 1;
+}
+
+message RoverRentalRobot {
+  string robot_id = 1;
+  string location_id = 2;
+  string robot_name = 3;
+  string robot_main_part_id = 4;
+}
+
+message GetRoverRentalRobotsResponse {
+  repeated RoverRentalRobot robots = 1;
+}
+
+message GetRobotResponse {
+  Robot robot = 1;
+}
+
+message GetRobotPartsRequest {
+  string robot_id = 1;
+}
+
+message GetRobotPartsResponse {
+  repeated RobotPart parts = 1;
+}
+
+message GetRobotPartRequest {
+  string id = 1;
+}
+
+message GetRobotPartResponse {
+  RobotPart part = 1;
+  string config_json = 2;
+}
+
+message GetRobotPartByNameAndLocationRequest {
+  string name = 1;
+  string location_id = 2;
+}
+
+message GetRobotPartByNameAndLocationResponse {
+  RobotPart part = 1;
+}
+
+message GetRobotPartLogsRequest {
+  string id = 1;
+  // TODO(https://viam.atlassian.net/browse/APP-3877): Remove this field
+  bool errors_only = 2 [deprecated = true];
+  optional string filter = 3;
+  optional string page_token = 4;
+  // logs of all levels are returned when the levels field is empty
+  repeated string levels = 5;
+  optional google.protobuf.Timestamp start = 6;
+  optional google.protobuf.Timestamp end = 7;
+  optional int64 limit = 8;
+  optional string source = 9;
+  optional bool user_facing_only = 10;
+}
+
+message GetRobotPartLogsResponse {
+  repeated common.v1.LogEntry logs = 1;
+  string next_page_token = 2;
+}
+
+message TailRobotPartLogsRequest {
+  string id = 1;
+  bool errors_only = 2;
+  optional string filter = 3;
+}
+
+message TailRobotPartLogsResponse {
+  repeated common.v1.LogEntry logs = 1;
+}
+
+message GetRobotPartHistoryRequest {
+  string id = 1;
+  optional string page_token = 2;
+  optional int64 page_limit = 3;
+  optional google.protobuf.Timestamp start = 4;
+  optional google.protobuf.Timestamp end = 5;
+}
+
+message GetRobotPartHistoryResponse {
+  repeated RobotPartHistoryEntry history = 1;
+  string next_page_token = 2;
+}
+
+message UpdateRobotPartRequest {
+  string id = 1;
+  string name = 2;
+  google.protobuf.Struct robot_config = 3;
+  optional google.protobuf.Timestamp last_known_update = 4;
+  // robot_config_json is the raw JSON string of the robot config, preserving user-defined key order.
+  // When set, this takes precedence over robot_config for storage purposes.
+  optional string robot_config_json = 5;
+}
+
+message UpdateRobotPartResponse {
+  RobotPart part = 1;
+}
+
+message NewRobotPartRequest {
+  string robot_id = 1;
+  string part_name = 2;
+}
+
+message NewRobotPartResponse {
+  string part_id = 1;
+}
+
+message DeleteRobotPartRequest {
+  string part_id = 1;
+}
+
+message GetRobotPartMetadataRequest {
+  string id = 1;
+}
+
+message GetRobotPartMetadataResponse {
+  google.protobuf.Struct data = 1;
+}
+
+message UpdateRobotPartMetadataRequest {
+  string id = 1;
+  google.protobuf.Struct data = 2;
+}
+
+message UpdateRobotPartMetadataResponse {}
+
+message GetRobotAPIKeysRequest {
+  string robot_id = 1;
+}
+
+message APIKey {
+  string id = 1;
+  string key = 2;
+  string name = 3;
+  google.protobuf.Timestamp created_on = 4;
+}
+
+message GetRobotAPIKeysResponse {
+  repeated APIKeyWithAuthorizations api_keys = 1;
+}
+
+message DeleteRobotPartResponse {}
+
+message Fragment {
+  string id = 1 [(tagger.v1.tags) = "bson:\"_id\" json:\"id,omitempty\""];
+  string name = 2 [(tagger.v1.tags) = "bson:\"name\" json:\"name\""];
+  google.protobuf.Struct fragment = 3 [(tagger.v1.tags) = "bson:\"fragment\" json:\"fragment\""];
+  string organization_owner = 4 [(tagger.v1.tags) = "bson:\"organization_owner\" json:\"owner\""];
+  bool public = 5 [(tagger.v1.tags) = "bson:\"public\" json:\"public\""];
+  google.protobuf.Timestamp created_on = 6 [(tagger.v1.tags) = "bson:\"created_on\""];
+  string organization_name = 7;
+  // number of robot parts using this fragment
+  int32 robot_part_count = 9;
+  // number of organizations using this fragment
+  int32 organization_count = 10;
+  // whether the organization(s) using this fragment is the same as the fragment org
+  bool only_used_by_owner = 11;
+  // the visibility of a fragment; public, private or unlisted
+  FragmentVisibility visibility = 12;
+  // latest timestamp when fragment was updated
+  google.protobuf.Timestamp last_updated = 13 [(tagger.v1.tags) = "bson:\"last_updated_at\""];
+  string revision = 14;
+}
+
+message FragmentHistoryEntry {
+  string fragment = 1 [(tagger.v1.tags) = "bson:\"fragment\" json:\"fragment\""];
+  google.protobuf.Timestamp edited_on = 2 [(tagger.v1.tags) = "bson:\"edited_on\" json:\"edited_on\""];
+  Fragment old = 3 [(tagger.v1.tags) = "bson:\"old\" json:\"old\""];
+  AuthenticatorInfo edited_by = 4 [(tagger.v1.tags) = "bson:\"edited_by\" json:\"edited_by\""];
+  string revision = 5 [(tagger.v1.tags) = "bson:\"revision\" json:\"revision\""];
+  google.protobuf.Struct config = 6 [(tagger.v1.tags) = "bson:\"config\" json:\"config\""];
+}
+
+message FragmentRevision {
+  string revision = 1;
+  google.protobuf.Timestamp created_at = 2;
+}
+
+message FragmentTag {
+  string tag = 1;
+  string revision = 2;
+}
+
+enum FragmentVisibility {
+  FRAGMENT_VISIBILITY_UNSPECIFIED = 0;
+  FRAGMENT_VISIBILITY_PRIVATE = 1;
+  FRAGMENT_VISIBILITY_PUBLIC = 2;
+  FRAGMENT_VISIBILITY_PUBLIC_UNLISTED = 3;
+}
+
+message FragmentError {
+  FragmentErrorType error_type = 1;
+  string fragment_id = 2;
+  string detail = 3;
+}
+
+enum FragmentErrorType {
+  FRAGMENT_ERROR_TYPE_UNSPECIFIED = 0;
+  FRAGMENT_ERROR_TYPE_NO_ACCESS = 1;
+  FRAGMENT_ERROR_TYPE_NESTING_LIMIT_EXCEEDED = 2;
+  FRAGMENT_ERROR_TYPE_CHILD_ID_INVALID = 3;
+  FRAGMENT_ERROR_TYPE_CYCLE_DETECTED = 4;
+}
+
+// Cached fragment usage statistics
+message FragmentUsage {
+  string fragment_id = 1;
+  int32 organizations = 2;
+  int32 machines = 3;
+  int32 machines_in_current_org = 4;
+  optional string version = 5; // revision or tag
+}
+
+message FragmentImport {
+  string fragment_id = 1;
+  string version = 2; // revision or tag
+  optional string prefix = 3; // namespace prefix
+  map<string, string> variables = 4; // key-value pairs for fragment variables
+}
+
+message ResolvedFragment {
+  string fragment_id = 1;
+  google.protobuf.Struct resolved_config = 2;
+  FragmentError error = 3;
+  string revision = 4;
+}
+
+message ListFragmentsRequest {
+  string organization_id = 1;
+  bool show_public = 2;
+  repeated FragmentVisibility fragment_visibility = 3;
+}
+
+message ListFragmentsResponse {
+  repeated Fragment fragments = 1;
+  repeated FragmentUsage fragment_usages = 2;
+}
+
+message GetFragmentRequest {
+  string id = 1;
+  string current_organization_id = 2;
+  optional string version = 3; // revision or tag
+}
+
+message GetFragmentResponse {
+  Fragment fragment = 1;
+  FragmentUsage fragment_usage = 2;
+  repeated FragmentRevision revisions = 3;
+  repeated FragmentTag tags = 4;
+}
+
+message CreateFragmentRequest {
+  string name = 1;
+  google.protobuf.Struct config = 2;
+  string organization_id = 3;
+  optional FragmentVisibility visibility = 4;
+}
+
+message CreateFragmentResponse {
+  Fragment fragment = 1;
+}
+
+message UpdateFragmentRequest {
+  string id = 1;
+  string name = 2;
+  google.protobuf.Struct config = 3;
+  optional bool public = 4;
+  optional FragmentVisibility visibility = 5;
+  optional google.protobuf.Timestamp last_known_update = 6;
+}
+
+message UpdateFragmentResponse {
+  Fragment fragment = 1;
+}
+
+message DeleteFragmentRequest {
+  string id = 1;
+}
+
+message DeleteFragmentResponse {}
+
+message GetFragmentHistoryRequest {
+  string id = 1;
+  optional string page_token = 2;
+  optional int64 page_limit = 3;
+}
+
+message GetFragmentHistoryResponse {
+  repeated FragmentHistoryEntry history = 1;
+  string next_page_token = 2;
+}
+
+message GetFragmentUsageRequest {
+  string fragment_id = 1;
+}
+
+message GetFragmentUsageResponse {
+  repeated FragmentUsage version_usages = 1;
+}
+
+message SetFragmentTagRequest {
+  string fragment_id = 1;
+  string tag = 2;
+  string revision = 3;
+}
+
+message SetFragmentTagResponse {
+  repeated FragmentTag tags = 1;
+}
+
+message DeleteFragmentTagRequest {
+  string fragment_id = 1;
+  string tag = 2;
+}
+
+message DeleteFragmentTagResponse {
+  repeated FragmentTag tags = 1;
+}
+
+message ListRobotsRequest {
+  string location_id = 1;
+}
+
+message ListRobotsForLocationsRequest {
+  repeated string location_ids = 1;
+}
+
+message ListRobotsForOrgRequest {
+  string org_id = 1;
+}
+
+message AdditionalFragment {
+  string fragment_id = 1;
+  optional string version = 2;
+}
+
+message ListNestedFragmentsRequest {
+  optional string fragment_id = 1;
+  repeated AdditionalFragment additional_fragments = 2;
+}
+
+message ListNestedFragmentsResponse {
+  repeated Fragment fragments = 1;
+  repeated ResolvedFragment resolved_fragments = 2;
+}
+
+message ListMachineFragmentsRequest {
+  // the machine_id used to filter fragments defined in a machine's parts.
+  // Also returns any fragments nested within the fragments defined in parts.
+  string machine_id = 1;
+  // TODO(APP-7642): Mark this field as deprecated
+  repeated string additional_fragment_ids = 2;
+  // additional fragments to append to the response. useful when needing to view fragments that will be
+  // provisionally added to the machine alongside existing fragments.
+  repeated AdditionalFragment additional_fragments = 3;
+}
+
+message ListMachineFragmentsResponse {
+  repeated Fragment fragments = 1;
+  repeated ResolvedFragment resolved_fragments = 2;
+}
+
+message ListMachineSummariesRequest {
+  // Optional organization ID. If no value is set it will search among all the organanizations the caller has access to
+  string organization_id = 1;
+  // Optional list of fragment IDs to filter machines that use any of these fragments
+  repeated string fragment_ids = 2;
+  // Optional list of location IDs to filter machines that are in any of these locations.
+  repeated string location_ids = 3;
+  // Optional max number of machines to return; default to 100 if unset
+  optional int32 limit = 4;
+}
+
+message ListMachineSummariesResponse {
+  repeated LocationSummary location_summaries = 1;
+}
+
+message LocationSummary {
+  string location_id = 1;
+  string location_name = 2;
+  repeated MachineSummary machine_summaries = 3;
+}
+
+message MachineSummary {
+  string machine_id = 1;
+  string machine_name = 2;
+  repeated PartSummary part_summaries = 3;
+}
+
+message FragmentSummary {
+  string id = 1;
+  reserved 2; // placeholder for fragment version
+  string name = 3;
+}
+
+message ViamServerVersion {
+  oneof version {
+    string major = 1;
+    string minor = 2;
+  }
+}
+
+message ViamAgentVersion {
+  oneof version {
+    string major = 1;
+    string minor = 2;
+  }
+}
+
+message PartSummary {
+  string part_id = 1;
+  string part_name = 2;
+  bool is_main_part = 11;
+  OnlineState online_state = 12;
+  int64 seconds_since_online = 13;
+  optional google.protobuf.Timestamp last_access = 14;
+  optional google.protobuf.Timestamp last_online = 3;
+  optional ViamServerVersion viam_server_version = 4;
+  optional ViamAgentVersion viam_agent_version = 5;
+  optional string os = 6;
+  optional string platform = 7;
+  optional string public_ip_address = 8;
+  optional string dns_name = 10;
+  repeated FragmentSummary fragments = 9;
+}
+
+message ListRobotsResponse {
+  repeated Robot robots = 1;
+}
+
+message ListRobotsForLocationsResponse {
+  repeated Robot robots = 1;
+}
+
+message ListRobotsForOrgResponse {
+  repeated Robot robots = 1;
+}
+
+message NewRobotRequest {
+  string name = 1;
+  string location = 2;
+}
+
+message NewRobotResponse {
+  string id = 1;
+}
+
+message UpdateRobotRequest {
+  string id = 1;
+  string name = 2;
+  string location = 3;
+}
+
+message UpdateRobotResponse {
+  Robot robot = 1;
+}
+
+message DeleteRobotRequest {
+  string id = 1;
+}
+
+message DeleteRobotResponse {}
+
+message GetRobotMetadataRequest {
+  string id = 1;
+}
+
+message GetRobotMetadataResponse {
+  google.protobuf.Struct data = 1;
+}
+
+message UpdateRobotMetadataRequest {
+  string id = 1;
+  google.protobuf.Struct data = 2;
+}
+
+message UpdateRobotMetadataResponse {}
+
+message MarkPartAsMainRequest {
+  string part_id = 1;
+}
+
+message MarkPartAsMainResponse {}
+
+message MarkPartForRestartRequest {
+  string part_id = 1;
+}
+message MarkPartForRestartResponse {}
+
+message CreateRobotPartSecretRequest {
+  // Robot Part ID to create the secret in.
+  string part_id = 1;
+}
+
+message CreateRobotPartSecretResponse {
+  // Location's auth after updates.
+  RobotPart part = 1;
+}
+
+message DeleteRobotPartSecretRequest {
+  string part_id = 1;
+  string secret_id = 2;
+}
+
+message DeleteRobotPartSecretResponse {}
+
+message Authorization {
+  string authorization_type = 1;
+  string authorization_id = 2;
+  string resource_type = 3;
+  string resource_id = 4;
+  string identity_id = 5;
+  string organization_id = 6;
+  string identity_type = 7;
+}
+
+message AddRoleRequest {
+  Authorization authorization = 1;
+}
+
+message AddRoleResponse {}
+
+message RemoveRoleRequest {
+  Authorization authorization = 1;
+}
+
+message RemoveRoleResponse {}
+
+message ChangeRoleRequest {
+  Authorization old_authorization = 1;
+  Authorization new_authorization = 2;
+}
+
+message ChangeRoleResponse {}
+
+message ListAuthorizationsRequest {
+  string organization_id = 1;
+  repeated string resource_ids = 2; // optional filter
+}
+
+message ListAuthorizationsResponse {
+  repeated Authorization authorizations = 1;
+}
+
+message CheckPermissionsRequest {
+  repeated AuthorizedPermissions permissions = 1;
+}
+
+message AuthorizedPermissions {
+  string resource_type = 1;
+  string resource_id = 2;
+  repeated string permissions = 3;
+}
+
+message CheckPermissionsResponse {
+  repeated AuthorizedPermissions authorized_permissions = 1;
+}
+
+message ModuleVersion {
+  // The semver string that represents the major/minor/patch version of the module
+  string version = 1;
+  // The uploads that are available for this module version
+  repeated Uploads files = 2;
+  // The models that this verion of the module provides
+  repeated Model models = 3;
+  // The entrypoint for this version of the module
+  string entrypoint = 4;
+  // The path to a setup script that is run before a newly downloaded module starts.
+  optional string first_run = 5;
+  // The markdown documentation for this version of the module
+  optional string markdown_description = 6;
+  // A list of applications associated with the module
+  repeated App apps = 7;
+}
+
+message ModuleMetadata {
+  // A list of models that are available in the module
+  repeated Model models = 1;
+  // A list of versions of the module that are available
+  // When this is returned from the backend, the versions are sorted in ascending order by the semver version
+  repeated ModuleVersion versions = 2;
+  // The executable to run to start the module program
+  string entrypoint = 3;
+  // The path to a setup script that is run before a newly downloaded module starts.
+  optional string first_run = 4;
+  // markdown content for the entire module
+  optional string markdown_description = 5;
+  // A list of applications associated with the module
+  repeated App apps = 6;
+  // Determines the type of module, either a registry module or an inline module.
+  optional ModuleSourceType source_type = 7;
+  // Specifies the language that the module is written in.
+  optional ModuleLanguage language = 8;
+}
+
+message MLModelVersion {
+  string version = 1;
+  google.protobuf.Timestamp created_on = 2;
+}
+
+message MLModelMetadata {
+  // A list of package versions for a ML model
+  repeated string versions = 1 [deprecated = true];
+  viam.app.mltraining.v1.ModelType model_type = 2;
+  viam.app.mltraining.v1.ModelFramework model_framework = 3;
+  repeated MLModelVersion detailed_versions = 4;
+}
+
+message MLTrainingVersion {
+  string version = 1;
+  google.protobuf.Timestamp created_on = 2;
+}
+
+message MLTrainingMetadata {
+  // A list of package versions for ML training source distribution
+  repeated MLTrainingVersion versions = 5;
+  viam.app.mltraining.v1.ModelType model_type = 2;
+  viam.app.mltraining.v1.ModelFramework model_framework = 3;
+  bool draft = 4;
+
+  reserved 1;
+}
+
+enum ModuleSourceType {
+  MODULE_SOURCE_TYPE_UNSPECIFIED = 0;
+  // Module source code is stored externally, such as in github.
+  MODULE_SOURCE_TYPE_EXTERNAL = 1;
+  // Module source code is versioned and managed within Viam.
+  MODULE_SOURCE_TYPE_VIAM_HOSTED = 2;
+}
+
+enum ModuleLanguage {
+  MODULE_LANGUAGE_UNSPECIFIED = 0;
+  MODULE_LANGUAGE_GOLANG = 1;
+  MODULE_LANGUAGE_PYTHON = 2;
+  MODULE_LANGUAGE_CPP = 3;
+}
+
+message RegistryItem {
+  // The id of the item, containing either:
+  // namespace:item_name when a namespace exists on the org.
+  // org_id:item_name when a namespace does not exist.
+  string item_id = 1;
+  // The id of the organization that owns the item
+  string organization_id = 2;
+  // The public namespace of the organization that owns the module
+  // This is empty if no public namespace is set
+  string public_namespace = 3;
+  // The name of the registry item
+  string name = 4;
+  // The type of the item in the registry
+  viam.app.packages.v1.PackageType type = 5;
+  // The visibility of the registry item
+  Visibility visibility = 6;
+  // The url to reference for documentation, code, etc.
+  string url = 7;
+  // A short description of the item that explains its purpose
+  string description = 8;
+  // The total number of robots using this item
+  int64 total_robot_usage = 9;
+  // The total number of robots using this item outside of the owning org
+  int64 total_external_robot_usage = 13;
+  // The total number of organizations using this item
+  int64 total_organization_usage = 10;
+  // The total number of organizations using this item outside of the owning org
+  int64 total_external_organization_usage = 14;
+
+  // Type-specific metadata
+  oneof metadata {
+    ModuleMetadata module_metadata = 11;
+    MLModelMetadata ml_model_metadata = 12;
+    MLTrainingMetadata ml_training_metadata = 18;
+  }
+
+  // When the item was created
+  google.protobuf.Timestamp created_at = 15;
+  // When the item was last updated, either through an update or upload.
+  google.protobuf.Timestamp updated_at = 16;
+}
+
+message GetRegistryItemRequest {
+  string item_id = 1;
+  optional bool include_markdown_documentation = 2;
+}
+
+message GetRegistryItemResponse {
+  RegistryItem item = 1;
+}
+
+message CreateRegistryItemRequest {
+  // The organization to create the registry item under
+  string organization_id = 1;
+  // The name of the registry item, which must be unique within your org
+  string name = 2;
+  // The type of the item in the registry
+  viam.app.packages.v1.PackageType type = 3;
+}
+
+message CreateRegistryItemResponse {}
+
+message UpdateRegistryItemRequest {
+  string item_id = 1;
+  viam.app.packages.v1.PackageType type = 2;
+  string description = 3;
+  Visibility visibility = 4;
+  optional string url = 5;
+
+  oneof metadata {
+    UpdateModuleMetadata update_module_metadata = 6;
+    UpdateMLModelMetadata update_ml_model_metadata = 7;
+    UpdateMLTrainingMetadata update_ml_training_metadata = 8;
+  }
+
+  optional string markdown_description = 9;
+}
+
+message UpdateRegistryItemResponse {}
+
+enum RegistryItemStatus {
+  REGISTRY_ITEM_STATUS_UNSPECIFIED = 0;
+  REGISTRY_ITEM_STATUS_PUBLISHED = 1;
+  REGISTRY_ITEM_STATUS_IN_DEVELOPMENT = 2;
+}
+
+message ListRegistryItemsRequest {
+  // The id of the organization to return registry items for.
+  optional string organization_id = 1;
+  repeated viam.app.packages.v1.PackageType types = 2;
+  repeated Visibility visibilities = 3;
+  repeated string platforms = 4;
+  repeated RegistryItemStatus statuses = 5;
+  optional string search_term = 6;
+  optional string page_token = 7;
+  // One or more public namespaces to return results for.
+  repeated string public_namespaces = 8;
+  optional bool include_markdown_documentation = 9;
+  repeated ModuleSourceType module_source_types = 10;
+  repeated ModuleLanguage module_languages = 11;
+}
+
+message ListRegistryItemsResponse {
+  repeated RegistryItem items = 1;
+}
+
+message DeleteRegistryItemRequest {
+  // The id of the item (formatted as prefix:name where prefix is the owner's orgid or namespace)
+  string item_id = 1;
+}
+
+message DeleteRegistryItemResponse {}
+
+message RenameRegistryItemRequest {
+  string item_id = 1;
+  string new_name = 2;
+}
+
+message RenameRegistryItemResponse {
+  RegistryItem item = 1;
+}
+
+message TransferRegistryItemRequest {
+  string item_id = 1;
+  string new_public_namespace = 2;
+}
+
+message TransferRegistryItemResponse {}
+
+// Modules
+message CreateModuleRequest {
+  // The organization to create the module under
+  string organization_id = 1;
+  // The name of the module, which must be unique within your org
+  string name = 2;
+}
+
+message CreateModuleResponse {
+  // The id of the module (formatted as prefix:name where prefix is the module owner's orgid or namespace)
+  string module_id = 1;
+  // The detail page of the module
+  string url = 2;
+}
+
+enum Visibility {
+  VISIBILITY_UNSPECIFIED = 0;
+  // Private registry items are visible only within the owning org
+  VISIBILITY_PRIVATE = 1;
+  // Public registry items are visible to everyone
+  VISIBILITY_PUBLIC = 2;
+  // Public Unlisted registry items are usable in everyone's robot but are hidden from the registry page as if they are private
+  VISIBILITY_PUBLIC_UNLISTED = 3;
+}
+
+message UpdateModuleRequest {
+  // The id of the module (formatted as prefix:name where prefix is the module owner's orgid or namespace)
+  string module_id = 1;
+  // The visibility that should be set for the module
+  Visibility visibility = 2;
+  // The url to reference for documentation, code, etc.
+  string url = 3;
+  // A short description of the module that explains its purpose
+  string description = 4;
+  // A list of models that are available in the module
+  repeated Model models = 5;
+  // The executable to run to start the module program
+  string entrypoint = 6;
+  // The path to a setup script that is run before a newly downloaded module starts.
+  optional string first_run = 7;
+  // A list of applications associated with the module
+  repeated App apps = 8;
+  // longer documentation provided in markdown format
+  optional string markdown_description = 9;
+}
+
+message AllowedOrgIDs {
+  repeated string ids = 1;
+}
+
+message App {
+  // The name of the application
+  string name = 1;
+  // The type of the application
+  string type = 2;
+  // The entrypoint of the application
+  string entrypoint = 3;
+  // Optional: fragment IDs to filter machines in the picker
+  repeated string fragment_ids = 4;
+  // Optional: path to a custom logo for branding
+  optional string logo_path = 5;
+  // Optional: structured customizations for the app (e.g., machine picker headings)
+  AppCustomizations customizations = 6;
+  // Optional: list of org IDs that are allowed to use this app; if empty, all orgs are allowed
+  optional AllowedOrgIDs allowed_org_ids = 7;
+}
+
+message UpdateModuleResponse {
+  // The detail page of the module
+  string url = 1;
+}
+
+message UpdateModuleMetadata {
+  // A list of models that are available in the module
+  repeated Model models = 1;
+  // The executable to run to start the module program
+  string entrypoint = 2;
+  // A list of applications associated with the module
+  repeated App apps = 3;
+  // Determines where the source code of module is managed, either externally or hosted by viam.
+  optional ModuleSourceType source_type = 4;
+  // The language the module is written in
+  optional ModuleLanguage language = 5;
+}
+
+message UpdateMLModelMetadata {
+  viam.app.mltraining.v1.ModelType model_type = 1;
+  viam.app.mltraining.v1.ModelFramework model_framework = 2;
+}
+
+message UpdateMLTrainingMetadata {
+  viam.app.mltraining.v1.ModelType model_type = 1;
+  viam.app.mltraining.v1.ModelFramework model_framework = 2;
+  bool draft = 3;
+}
+
+message Model {
+  // The colon-delimited-triplet of the api implemented by the model
+  string api = 1;
+  // The colon-delimited-triplet of the model
+  string model = 2;
+  // The markdown content describing the usage of the model
+  optional string markdown_documentation = 3;
+  // A short description of the model that explains its purpose
+  optional string description = 4;
+  // A list of supported hardware names
+  repeated string supported_hardware = 5;
+}
+
+message ModuleFileInfo {
+  // The id of the module (formatted as prefix:name where prefix is the module owner's orgid or namespace)
+  string module_id = 1;
+  // The semver string that represents the new major/minor/patch version of the module
+  string version = 2;
+  // The platform that the file is built to run on
+  string platform = 3;
+  // Platform tag constraints. When a robot requests its config, it uploads a platform and a list of
+  // platform tags. The platform is checked against `platform` above, and the tags are checked against
+  // this list.
+  repeated string platform_tags = 5;
+}
+
+message UploadModuleFileRequest {
+  oneof module_file {
+    // The information about the module file being uploaded
+    ModuleFileInfo module_file_info = 1;
+    // The file contents to be uploaded
+    bytes file = 2;
+  }
+}
+
+message UploadModuleFileResponse {
+  // The detail page of the module
+  string url = 1;
+}
+
+message GetModuleRequest {
+  // The id of the module (formatted as prefix:name where prefix is the module owner's orgid or namespace)
+  string module_id = 1;
+  optional bool include_markdown_documentation = 2;
+}
+
+message GetModuleResponse {
+  // The module object
+  Module module = 1;
+}
+
+message Module {
+  // The id of the module (formatted as prefix:name where prefix is the module owner's orgid or namespace)
+  string module_id = 1;
+  // The name of the module
+  string name = 2;
+  // The visibility of the module
+  Visibility visibility = 3;
+  // The versions of the module that are available
+  // When this is returned from the backend, the versions are sorted in ascending order by the semver version
+  repeated VersionHistory versions = 4;
+  // The url to reference for documentation, code, etc.
+  string url = 5;
+  // A short description of the module that explains its purpose
+  string description = 6;
+  // A list of models that are available in the module
+  repeated Model models = 7;
+  // The total number of robots using this module
+  int64 total_robot_usage = 8;
+  // The total number of organizations using this module
+  int64 total_organization_usage = 9;
+  // The id of the organization that owns the module
+  string organization_id = 10;
+  // The executable to run to start the module program
+  string entrypoint = 11;
+  // The public namespace of the organization that owns the module
+  // This is empty if no public namespace is set
+  string public_namespace = 12;
+  // The path to a setup script that is run before a newly downloaded module starts.
+  optional string first_run = 13;
+  // Longer documentation provided in markdown format
+  optional string markdown_description = 14;
+  // A list of applications associated with the module
+  repeated App apps = 15;
+}
+
+message VersionHistory {
+  // The semver string that represents the major/minor/patch version of the module
+  string version = 1;
+  // The uploads that are available for this module version
+  repeated Uploads files = 2;
+  // The models that this verion of the module provides
+  repeated Model models = 3;
+  // The entrypoint for this version of the module
+  string entrypoint = 4;
+  // The path to a setup script that is run before a newly downloaded module starts.
+  optional string first_run = 5;
+  // The markdown documentation for this version of the module
+  optional string markdown_description = 6;
+  // A list of applications associated with the module
+  repeated App apps = 7;
+}
+
+message Uploads {
+  // The OS and architecture the module is built to run on
+  string platform = 1;
+  // The time when the file was uploaded
+  google.protobuf.Timestamp uploaded_at = 2;
+}
+
+message ListModulesRequest {
+  // The id of the organization to return private modules for.
+  optional string organization_id = 1;
+  optional bool include_markdown_documentation = 2;
+}
+
+message ListModulesResponse {
+  // A listed of modules. When authenticated, this API will return modules that are private for this org. Public modules are always returned.
+  repeated Module modules = 1;
+}
+
+message GetUserIDByEmailRequest {
+  string email = 1;
+}
+
+message GetUserIDByEmailResponse {
+  string user_id = 1;
+}
+
+message ListOrganizationsByUserRequest {
+  string user_id = 1;
+}
+
+message OrgDetails {
+  string org_id = 1;
+  string org_name = 2;
+  optional string org_cid = 3;
+  optional string public_namespace = 4;
+  optional string billing_tier = 5;
+}
+
+message ListOrganizationsByUserResponse {
+  repeated OrgDetails orgs = 1;
+}
+
+message SearchOrganizationsRequest {
+  optional string org_id = 1;
+  optional string org_name = 2;
+  optional string cid = 3;
+  optional string public_namespace = 4;
+}
+
+message SearchOrganizationsResponse {
+  repeated OrgDetails organizations = 1;
+}
+
+message CreateKeyRequest {
+  repeated Authorization authorizations = 1;
+  string name = 2;
+}
+
+message CreateKeyResponse {
+  string key = 1;
+  string id = 2;
+}
+
+message DeleteKeyRequest {
+  string id = 1;
+}
+
+message DeleteKeyResponse {}
+
+message RenameKeyRequest {
+  string id = 1;
+  string name = 2;
+}
+
+message RenameKeyResponse {
+  string id = 1;
+  string name = 2;
+}
+
+message AuthorizationDetails {
+  string authorization_type = 1;
+  string authorization_id = 2;
+  string resource_type = 3;
+  string resource_id = 4;
+  string org_id = 5;
+}
+
+message APIKeyWithAuthorizations {
+  APIKey api_key = 1;
+  repeated AuthorizationDetails authorizations = 2;
+}
+
+message ListKeysRequest {
+  string org_id = 1;
+}
+
+message ListKeysResponse {
+  repeated APIKeyWithAuthorizations api_keys = 1;
+}
+
+message RotateKeyRequest {
+  string id = 1;
+}
+
+message RotateKeyResponse {
+  string id = 1;
+  string key = 2;
+}
+
+message CreateKeyFromExistingKeyAuthorizationsRequest {
+  string id = 1;
+}
+
+message CreateKeyFromExistingKeyAuthorizationsResponse {
+  string id = 1;
+  string key = 2;
+}
+
+message GetAppContentRequest {
+  string public_namespace = 1;
+  string name = 2;
+}
+
+enum AppType {
+  APP_TYPE_UNSPECIFIED = 0;
+  APP_TYPE_SINGLE_MACHINE = 1;
+  APP_TYPE_MULTI_MACHINE = 2;
+}
+
+message GetAppContentResponse {
+  string blob_path = 1;
+  string entrypoint = 2;
+  AppType app_type = 3;
+  bool public = 4;
+}
+
+message OrganizationSetLogoRequest {
+  string org_id = 1;
+  bytes logo = 2;
+}
+message OrganizationSetLogoResponse {}
+
+message OrganizationGetLogoRequest {
+  string org_id = 1;
+}
+message OrganizationGetLogoResponse {
+  string url = 1;
+}
+
+message EnableAuthServiceRequest {
+  string org_id = 1;
+}
+message EnableAuthServiceResponse {}
+
+message DisableAuthServiceRequest {
+  string org_id = 1;
+}
+message DisableAuthServiceResponse {}
+
+message CreateOAuthAppRequest {
+  string org_id = 1;
+  string client_name = 2;
+  OAuthConfig oauth_config = 3;
+}
+message CreateOAuthAppResponse {
+  string client_id = 1;
+  string client_secret = 2;
+}
+
+message ReadOAuthAppRequest {
+  string org_id = 1;
+  string client_id = 2;
+}
+message ReadOAuthAppResponse {
+  string client_name = 1;
+  string client_secret = 2;
+  OAuthConfig oauth_config = 3;
+}
+
+message UpdateOAuthAppRequest {
+  string org_id = 1;
+  string client_id = 2;
+  string client_name = 3;
+  OAuthConfig oauth_config = 4;
+}
+message UpdateOAuthAppResponse {}
+
+message DeleteOAuthAppRequest {
+  string org_id = 1;
+  string client_id = 2;
+}
+message DeleteOAuthAppResponse {}
+
+message ListOAuthAppsRequest {
+  string org_id = 1;
+}
+message ListOAuthAppsResponse {
+  repeated string client_ids = 1;
+}
+
+enum ClientAuthentication {
+  CLIENT_AUTHENTICATION_UNSPECIFIED = 0;
+  CLIENT_AUTHENTICATION_REQUIRED = 1;
+  CLIENT_AUTHENTICATION_NOT_REQUIRED = 2;
+  CLIENT_AUTHENTICATION_NOT_REQUIRED_WHEN_USING_PKCE = 3;
+}
+
+enum PKCE {
+  PKCE_UNSPECIFIED = 0;
+  PKCE_REQUIRED = 1;
+  PKCE_NOT_REQUIRED = 2;
+  PKCE_NOT_REQUIRED_WHEN_USING_CLIENT_AUTHENTICATION = 3;
+}
+
+enum URLValidation {
+  URL_VALIDATION_UNSPECIFIED = 0;
+  URL_VALIDATION_EXACT_MATCH = 1;
+  URL_VALIDATION_ALLOW_WILDCARDS = 2;
+}
+
+enum EnabledGrant {
+  ENABLED_GRANT_UNSPECIFIED = 0;
+  ENABLED_GRANT_AUTHORIZATION_CODE = 1;
+  ENABLED_GRANT_IMPLICIT = 2;
+  ENABLED_GRANT_PASSWORD = 3;
+  ENABLED_GRANT_REFRESH_TOKEN = 4;
+  ENABLED_GRANT_DEVICE_CODE = 5;
+}
+
+message OAuthConfig {
+  ClientAuthentication client_authentication = 1;
+  PKCE pkce = 2;
+  URLValidation url_validation = 3;
+  repeated string origin_uris = 4;
+  repeated string redirect_uris = 5;
+  string logout_uri = 6;
+  repeated EnabledGrant enabled_grants = 7;
+  string invite_redirect_uri = 8;
+}
+
+// Branding and customization for app machine picker
+message GetAppBrandingRequest {
+  string public_namespace = 1;
+  string name = 2;
+}
+
+message TextOverrides {
+  map<string, string> fields = 1;
+}
+
+message GetAppBrandingResponse {
+  optional string logo_path = 1;
+  map<string, TextOverrides> text_customizations = 2;
+  repeated string fragment_ids = 3;
+  repeated string allowed_org_ids = 4;
+}
+
+message AppCustomizations {
+  MachinePickerCustomizations machine_picker = 1;
+}
+
+message MachinePickerCustomizations {
+  optional string heading = 1;
+  optional string subheading = 2;
+}
+
+message UploadDevicePushTokenRequest {
+  string app_id = 1;
+  string device_token = 2;
+  string device_uuid = 3;
+}
+
+message UploadDevicePushTokenResponse {}
+
+message DeleteDevicePushTokenRequest {
+  string app_id = 1;
+  string device_uuid = 2;
+}
+
+message DeleteDevicePushTokenResponse {}
+
+message GetDevicePushTokensRequest {
+  string app_id = 1;
+}
+
+message GetDevicePushTokensResponse {
+  repeated string device_tokens = 1;
+}
+
+message SetFirebaseConfigRequest {
+  string org_id = 1;
+  string app_id = 2;
+  string config_json = 3;
+}
+
+message SetFirebaseConfigResponse {}
+
+message GetFirebaseConfigRequest {
+  string org_id = 1;
+}
+
+message GetFirebaseConfigResponse {
+  string app_id = 1;
+}
+
+message DeleteFirebaseConfigRequest {
+  string org_id = 1;
+  string app_id = 2;
+}
+
+message DeleteFirebaseConfigResponse {}

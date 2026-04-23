@@ -1,0 +1,107 @@
+package generic_test
+
+import (
+	"context"
+	"errors"
+	"testing"
+
+	commonpb "go.viam.com/api/common/v1"
+	genericpb "go.viam.com/api/service/generic/v1"
+	"go.viam.com/test"
+	"go.viam.com/utils/protoutils"
+
+	"go.viam.com/rdk/logging"
+	"go.viam.com/rdk/resource"
+	"go.viam.com/rdk/services/generic"
+	"go.viam.com/rdk/testutils"
+	"go.viam.com/rdk/testutils/inject"
+)
+
+var (
+	errDoFailed        = errors.New("do failed")
+	errGetStatusFailed = errors.New("can't get status")
+)
+
+func newServer(logger logging.Logger) (genericpb.GenericServiceServer, *inject.GenericService, *inject.GenericService, error) {
+	injectGeneric := &inject.GenericService{}
+	injectGeneric2 := &inject.GenericService{}
+	resourceMap := map[resource.Name]resource.Resource{
+		generic.Named(testGenericName): injectGeneric,
+		generic.Named(failGenericName): injectGeneric2,
+	}
+	injectSvc, err := resource.NewAPIResourceCollection(generic.API, resourceMap)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	return generic.NewRPCServiceServer(injectSvc, logger).(genericpb.GenericServiceServer), injectGeneric, injectGeneric2, nil
+}
+
+func TestGenericDo(t *testing.T) {
+	genericServer, workingGeneric, failingGeneric, err := newServer(logging.NewTestLogger(t))
+	test.That(t, err, test.ShouldBeNil)
+
+	workingGeneric.DoFunc = func(
+		ctx context.Context,
+		cmd map[string]interface{},
+	) (
+		map[string]interface{},
+		error,
+	) {
+		return cmd, nil
+	}
+	failingGeneric.DoFunc = func(
+		ctx context.Context,
+		cmd map[string]interface{},
+	) (
+		map[string]interface{},
+		error,
+	) {
+		return nil, errDoFailed
+	}
+
+	commandStruct, err := protoutils.StructToStructPb(testutils.TestCommand)
+	test.That(t, err, test.ShouldBeNil)
+
+	req := commonpb.DoCommandRequest{Name: testGenericName, Command: commandStruct}
+	resp, err := genericServer.DoCommand(context.Background(), &req)
+	test.That(t, err, test.ShouldBeNil)
+	test.That(t, resp, test.ShouldNotBeNil)
+	test.That(t, resp.Result.AsMap()["cmd"], test.ShouldEqual, testutils.TestCommand["cmd"])
+	test.That(t, resp.Result.AsMap()["data"], test.ShouldEqual, testutils.TestCommand["data"])
+
+	req = commonpb.DoCommandRequest{Name: failGenericName, Command: commandStruct}
+	resp, err = genericServer.DoCommand(context.Background(), &req)
+	test.That(t, err, test.ShouldNotBeNil)
+	test.That(t, err.Error(), test.ShouldContainSubstring, errDoFailed.Error())
+	test.That(t, resp, test.ShouldBeNil)
+}
+
+func TestServerGetStatus(t *testing.T) {
+	genericServer, workingGeneric, _, err := newServer(logging.NewTestLogger(t))
+	test.That(t, err, test.ShouldBeNil)
+
+	_, err = genericServer.GetStatus(context.Background(), &commonpb.GetStatusRequest{Name: "missing"})
+	test.That(t, err, test.ShouldNotBeNil)
+	test.That(t, err.Error(), test.ShouldContainSubstring, "not found")
+
+	resp, err := genericServer.GetStatus(context.Background(), &commonpb.GetStatusRequest{Name: testGenericName})
+	test.That(t, err, test.ShouldBeNil)
+	test.That(t, resp.Result.AsMap(), test.ShouldBeEmpty)
+
+	expectedStatus := map[string]interface{}{"key": "value", "count": float64(42)}
+	workingGeneric.StatusFunc = func(ctx context.Context) (map[string]interface{}, error) {
+		return expectedStatus, nil
+	}
+	resp, err = genericServer.GetStatus(context.Background(), &commonpb.GetStatusRequest{Name: testGenericName})
+	test.That(t, err, test.ShouldBeNil)
+	test.That(t, resp.Result.AsMap(), test.ShouldResemble, expectedStatus)
+
+	workingGeneric.StatusFunc = func(ctx context.Context) (map[string]interface{}, error) {
+		return nil, errGetStatusFailed
+	}
+	_, err = genericServer.GetStatus(context.Background(), &commonpb.GetStatusRequest{Name: testGenericName})
+	test.That(t, err, test.ShouldNotBeNil)
+	test.That(t, err.Error(), test.ShouldContainSubstring, errGetStatusFailed.Error())
+
+	workingGeneric.StatusFunc = nil
+}

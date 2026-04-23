@@ -1,0 +1,134 @@
+{
+   "audio_in": {
+    "func": "Properties",
+    "packagePath": "go.viam.com/rdk/components",
+    "args": ["context.Background()", "map[string]interface{}{}" ],
+    "packageName": "audioin",
+    "importName": "audioin"
+  },
+  "audio_out": {
+    "func": "Properties",
+    "packagePath": "go.viam.com/rdk/components",
+    "args": ["context.Background()", "map[string]interface{}{}"],
+    "packageName": "audioout",
+    "importName": "audioout"
+  },
+  "base": {
+    "func": "IsMoving",
+    "packagePath": "go.viam.com/rdk/components",
+    "args": ["context.Background()"]
+  },
+  "button": {
+    "func": "Push",
+    "packagePath": "go.viam.com/rdk/components",
+    "commented": true,
+    "hasReturn": false
+  },
+  "genericcomponent": {
+    "func": "DoCommand",
+    "packagePath": "go.viam.com/rdk/components",
+    "args": ["context.Background()", "map[string]interface{}{}"],
+    "importName": "genericcomponent",
+    "commented": true
+  },
+  "board": {
+    "func": "GPIOPinByName",
+    "packagePath": "go.viam.com/rdk/components",
+    "args": ["\"16\""],
+    "comment": "Note that the pin supplied is a placeholder. Please change this to a valid pin."
+  },
+  "camera": {
+    "func": "Properties",
+    "packagePath": "go.viam.com/rdk/components",
+    "args": ["context.Background()"]
+  },
+  "encoder": {
+    "func": "Properties",
+    "packagePath": "go.viam.com/rdk/components",
+    "args": ["context.Background()", "map[string]interface{}{}"]
+  },
+  "motor": {
+    "func": "IsMoving",
+    "packagePath": "go.viam.com/rdk/components",
+    "args": ["context.Background()"]
+  },
+  "sensor": {
+    "func": "Readings",
+    "packagePath": "go.viam.com/rdk/components",
+    "args": ["context.Background()", "map[string]interface{}{}"]
+  },
+  "servo": {
+    "func": "Position",
+    "packagePath": "go.viam.com/rdk/components",
+    "args": ["context.Background()", "map[string]interface{}{}"]
+  },
+  "switch": {
+    "func": "GetPosition",
+    "packagePath": "go.viam.com/rdk/components",
+    "args": ["context.Background()", "map[string]interface{}{}"],
+    "importName": "toggleswitch"
+  },
+  "arm": {
+    "func": "EndPosition",
+    "packagePath": "go.viam.com/rdk/components",
+    "args": ["context.Background()", "map[string]interface{}{}"]
+  },
+  "audio": {
+    "func": "MediaProperties",
+    "packagePath": "go.viam.com/rdk/components",
+    "args": ["context.Background()"]
+  },
+  "gantry": {
+    "func": "Lengths",
+    "packagePath": "go.viam.com/rdk/components",
+    "args": ["context.Background()", "map[string]interface{}{}"]
+  },
+  "gripper": {
+    "func": "IsMoving",
+    "packagePath": "go.viam.com/rdk/components",
+    "args": ["context.Background()"]
+  },
+  "input_controller": {
+    "func": "Controls",
+    "packagePath": "go.viam.com/rdk/components",
+    "args": ["context.Background()", "map[string]interface{}{}"],
+    "packageName": "input",
+    "importName": "input"
+  },
+  "movement_sensor": {
+    "func": "LinearAcceleration",
+    "packagePath": "go.viam.com/rdk/components",
+    "args": ["context.Background()", "map[string]interface{}{}"],
+    "packageName": "movementsensor",
+    "importName": "movementsensor"
+  },
+  "power_sensor": {
+    "func": "Power",
+    "packagePath": "go.viam.com/rdk/components",
+    "args": ["context.Background()", "map[string]interface{}{}"],
+    "packageName": "powersensor",
+    "importName": "powersensor"
+  },
+  "pose_tracker": {
+    "func": "Poses",
+    "packagePath": "go.viam.com/rdk/components",
+    "args": []
+  },
+  "genericservice": {
+    "func": "DoCommand",
+    "packagePath": "go.viam.com/rdk/services",
+    "args": ["context.Background()", "map[string]interface{}{}"],
+    "commented": true,
+    "importName": "genericservice"
+  },
+  "motion": {
+    "func": "GetPose",
+    "packagePath": "go.viam.com/rdk/services",
+    "args": []
+  },
+  "vision": {
+    "func": "GetProperties",
+    "packagePath": "go.viam.com/rdk/services",
+    "args": ["context.Background()", "map[string]interface{}{}"]
+  }
+}

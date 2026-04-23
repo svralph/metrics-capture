@@ -1,0 +1,134 @@
+syntax = "proto3";
+
+package viam.service.slam.v1;
+
+import "common/v1/common.proto";
+import "google/api/annotations.proto";
+
+option go_package = "go.viam.com/api/service/slam/v1";
+option java_package = "com.viam.service.slam.v1";
+
+// A SlamService declares the gRPC contract for a slam service
+service SLAMService {
+  // GetPosition returns the current estimated position of the robot with
+  // respect to a returned component reference.
+  rpc GetPosition(GetPositionRequest) returns (GetPositionResponse) {
+    option (google.api.http) = {get: "/viam/api/v1/service/slam/{name}/position"};
+  }
+
+  // GetPointCloudMap returns the latest pointcloud map available where XY is the ground
+  // plane and positive Z is up, following the Right Hand Rule.
+  rpc GetPointCloudMap(GetPointCloudMapRequest) returns (stream GetPointCloudMapResponse) {
+    option (google.api.http) = {get: "/viam/api/v1/service/slam/{name}/point_cloud_map"};
+  }
+
+  // GetInternalState returns the internal map as defined by the specified slam
+  // algorithm required to continue mapping/localizing.
+  // This endpoint is not intended for end users.
+  rpc GetInternalState(GetInternalStateRequest) returns (stream GetInternalStateResponse) {
+    option (google.api.http) = {get: "/viam/api/v1/service/slam/{name}/internal_state"};
+  }
+
+  // GetProperties returns properties of the current slam service including mapping_mode
+  // and cloud_slam, where mapping_mode is the type of mapping/localizing being performed
+  // and cloud_slam is a boolean representing if this SLAM service is being run in the cloud.
+  rpc GetProperties(GetPropertiesRequest) returns (GetPropertiesResponse) {
+    option (google.api.http) = {get: "/viam/api/v1/service/slam/{name}/properties"};
+  }
+
+  // DoCommand sends/receives arbitrary commands.
+  rpc DoCommand(common.v1.DoCommandRequest) returns (common.v1.DoCommandResponse) {
+    option (google.api.http) = {post: "/viam/api/v1/service/slam/{name}/do_command"};
+  }
+
+  // GetStatus returns the status of the resource
+  rpc GetStatus(common.v1.GetStatusRequest) returns (common.v1.GetStatusResponse) {
+    option (google.api.http) = {get: "/viam/api/v1/service/slam/{name}/get_status"};
+  }
+}
+
+// MappingMode represnts the various form of mapping and localizing SLAM can perform.
+// These include, creating a new map, localizing on an existiing map and updating an
+// exisiting map.
+enum MappingMode {
+  MAPPING_MODE_UNSPECIFIED = 0;
+  MAPPING_MODE_CREATE_NEW_MAP = 1;
+  MAPPING_MODE_LOCALIZE_ONLY = 2;
+  MAPPING_MODE_UPDATE_EXISTING_MAP = 3;
+}
+
+message GetPositionRequest {
+  // Name of slam service
+  string name = 1;
+}
+
+message GetPositionResponse {
+  // Current position of the specified component in the SLAM Map
+  common.v1.Pose pose = 1;
+}
+
+message GetPointCloudMapRequest {
+  // Name of slam service
+  string name = 1;
+  // For SLAM services that implement handling an edited map, this boolean
+  // should indicate whether to return that edited map. If the SLAM service
+  // does not handle edited maps, the unedited map will be returned instead.
+  optional bool return_edited_map = 2;
+}
+
+message GetPointCloudMapResponse {
+  // One chunk of the PointCloud.
+  // For a given GetPointCloudMap request, concatenating all
+  // GetPointCloudMapResponse.point_cloud_pcd_chunk values in the
+  // order received result in the complete pointcloud in standard PCD
+  // format where XY is the ground plane and positive Z is up, following
+  // the Right Hand Rule.
+  //
+  // Read more about the pointcloud format
+  // [in the docs](https://pointclouds.org/documentation/tutorials/pcd_file_format.html)
+  //
+  // Viam expects pointcloud data with fields "x y z" or "x y z rgb", and for
+  // this to be specified in the pointcloud header in the FIELDS entry. If color
+  // data is included in the pointcloud, Viam's services assume that the color
+  // value encodes a confidence score for that data point. Viam expects the
+  // confidence score to be encoded in the blue parameter of the RGB value, on a
+  // scale from 1-100.
+  //
+  // Pointclouds are little endian encoded.
+  bytes point_cloud_pcd_chunk = 1;
+}
+
+message GetInternalStateRequest {
+  // Name of slam service
+  string name = 1;
+}
+
+message GetInternalStateResponse {
+  // Chunk of the internal state of the SLAM algorithm required to continue
+  // mapping/localization
+  bytes internal_state_chunk = 1;
+}
+
+message GetPropertiesRequest {
+  // Name of the slam service
+  string name = 1;
+}
+
+// Returns properties information for the named slam service
+message GetPropertiesResponse {
+  bool cloud_slam = 1;
+  MappingMode mapping_mode = 2;
+  optional string internal_state_file_type = 3;
+  repeated SensorInfo sensor_info = 4;
+}
+
+message SensorInfo {
+  string name = 1;
+  SensorType type = 2;
+}
+
+enum SensorType {
+  SENSOR_TYPE_UNSPECIFIED = 0;
+  SENSOR_TYPE_CAMERA = 1;
+  SENSOR_TYPE_MOVEMENT_SENSOR = 2;
+}

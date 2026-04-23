@@ -1,0 +1,32 @@
+{
+    "network": {
+        "fqdn": "something-unique",
+        "bind_address": ":8080"
+    },
+    "auth": {
+        "handlers": [
+            {
+                "type": "api-key",
+                "config": {
+                    "keys": ["${RDK_AUTH_API_KEY}", "${RDK_AUTH_API_KEY}2"]
+                }
+            }
+        ]
+    },
+    "components": [
+        {
+            "name": "arm1",            
+            "type": "arm",
+            "model": "fake",
+            "attributes": {
+                "model-path": "../../components/arm/fake/kinematics/fake.json"
+            }
+        },
+        {
+            "name": "servo1",
+            "type": "servo",
+            "model": "fake"
+
+        }
+    ]
+}

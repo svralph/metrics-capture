@@ -1,0 +1,126 @@
+{
+    "components": [
+        {
+            "name": "board2",
+            "type": "board",
+            "model": "fake",
+            "attributes": {}
+        },
+        {
+            "name": "board1",
+            "type": "board",
+            "model": "fake",
+            "attributes": {
+                "digital_interrupts": [
+                    {
+                        "name": "encoder",
+                        "pin": "16"
+                    },
+                    {
+                        "name": "encoder-b",
+                        "pin": "22"
+                    }
+                ]
+            }
+        },
+        {
+            "name": "m1",
+            "type": "motor",
+            "model": "gpio",
+            "depends_on": [
+                "board1",
+                "e1"
+            ],
+            "attributes": {
+                "board": "board1",
+                "encoder": "e1",
+                "pins": {
+                    "pwm": "5",
+                    "dir": "2"
+                },
+                "pwm_freq": 4000,
+                "max_rpm": 60,
+                "ticks_per_rotation": 1
+            }
+        },
+        {
+            "name": "e1",
+            "type": "encoder",
+            "model": "incremental",
+            "depends_on": [
+                "board1"
+            ],
+            "attributes": {
+                "board": "board1",
+                "pins": {
+                    "a": "encoder",
+                    "b": "encoder-b"
+                }
+            }
+        },
+        {
+            "name": "mock1",
+            "type": "mock",
+            "model": "${TEST_MODEL_NAME_1-fake}",
+            "attributes": {}
+        },
+        {
+            "name": "mock2",
+            "type": "mock",
+            "model": "${TEST_MODEL_NAME_1-fake}",
+            "attributes": {}
+        },
+        {
+            "name": "mock3",
+            "type": "mock",
+            "model": "${TEST_MODEL_NAME_1-fake}",
+            "depends_on": [
+                "mock2"
+            ],
+            "attributes": {
+                "blah": 10
+            }
+        },
+        {
+            "name": "mock4",
+            "type": "mock",
+            "model": "${TEST_MODEL_NAME_1-fake}",
+            "depends_on": [
+                "mock3"
+            ],
+            "attributes": {}
+        },
+        {
+            "name": "mock5",
+            "type": "mock",
+            "model": "${TEST_MODEL_NAME_1-fake}",
+            "depends_on": [
+                "mock2"
+            ],
+            "attributes": {
+                "blah": 10
+            }
+        }
+    ],
+    "processes": [
+        {
+            "id": "1",
+            "name": "echo",
+            "args": [
+                "hello",
+                "world"
+            ],
+            "one_shot": true
+        },
+        {
+            "id": "2",
+            "name": "echo",
+            "args": [
+                "hello",
+                "world",
+                "again"
+            ],
+            "one_shot": true
+        }
+    ]
+}

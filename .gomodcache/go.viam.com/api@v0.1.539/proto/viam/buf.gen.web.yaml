@@ -1,0 +1,13 @@
+version: v2
+plugins:
+  - protoc_builtin: js
+    out: gen/js
+    opt: import_style=commonjs
+  - local: protoc-gen-grpc-web
+    out: gen/js
+    opt:
+      - import_style=commonjs
+      - mode=grpcwebtext
+  - local: protoc-gen-ts
+    out: gen/js
+    opt: service=grpc-web

@@ -1,0 +1,104 @@
+BUILD_CHANNEL?=local
+# note: UNAME_M is overrideable because it is wrong in 32-bit arm container executing natively on 64-bit arm
+UNAME_M ?= $(shell uname -m)
+ifneq ($(shell which dpkg 2>/dev/null), "")
+DPKG_ARCH ?= $(shell dpkg --print-architecture)
+APPIMAGE_ARCH ?= $(shell dpkg --print-architecture)
+endif
+
+PRERELEASE_PATH := $(if $(findstring -dev,$(BUILD_CHANNEL)),"prerelease/","")
+
+appimage: server-static
+	cd etc/packaging/appimages && BUILD_CHANNEL=${BUILD_CHANNEL} appimage-builder --recipe viam-server-`uname -m`.yml
+	if [ "${RELEASE_TYPE}" = "stable" ]; then \
+		cd etc/packaging/appimages; \
+		BUILD_CHANNEL=stable appimage-builder --recipe viam-server-`uname -m`.yml; \
+	fi
+	mkdir -p etc/packaging/appimages/deploy/
+	mv etc/packaging/appimages/*.AppImage* etc/packaging/appimages/deploy/
+	chmod 755 etc/packaging/appimages/deploy/*.AppImage
+
+# AppImage packaging targets run in canon docker
+appimage-multiarch: appimage-amd64 appimage-arm64
+
+appimage-amd64:
+	canon --arch amd64 make appimage
+
+appimage-arm64:
+	canon --arch arm64 make appimage
+
+appimage-deploy:
+	gsutil -m -h "Cache-Control: no-cache" cp etc/packaging/appimages/deploy/* gs://packages.viam.com/apps/viam-server/
+
+static-release: $(BIN_OUTPUT_PATH)/viam-server-static-compressed
+	rm -rf etc/packaging/static/deploy/
+	mkdir -p etc/packaging/static/deploy/
+	cp $^ etc/packaging/static/deploy/viam-server-${BUILD_CHANNEL}-${UNAME_M}
+	if [ "${RELEASE_TYPE}" = "stable" ] || [ "${RELEASE_TYPE}" = "latest" ]; then \
+		cp $^ etc/packaging/static/deploy/viam-server-${RELEASE_TYPE}-${UNAME_M}; \
+	fi
+	rm -rf etc/packaging/static/manifest/
+	mkdir -p etc/packaging/static/manifest/
+	go run etc/subsystem_manifest/main.go \
+		--binary-path etc/packaging/static/deploy/viam-server-${BUILD_CHANNEL}-${UNAME_M} \
+		--upload-path "packages.viam.com/apps/viam-server/${PRERELEASE_PATH}viam-server-${BUILD_CHANNEL}-${UNAME_M}" \
+		--version ${BUILD_CHANNEL} \
+		--arch ${UNAME_M} \
+		--output-path etc/packaging/static/manifest/viam-server-${BUILD_CHANNEL}-${UNAME_M}.json
+
+static-release-win:
+	rm -f bin/static/viam-server-windows.exe
+	GOOS=windows GOARCH=amd64 go build -tags no_cgo,osusergo,netgo -ldflags="-extldflags=-static $(COMMON_LDFLAGS)" -o bin/static/viam-server-windows.exe ./web/cmd/server
+	upx --best --lzma bin/static/viam-server-windows.exe
+
+	rm -rf etc/packaging/static/deploy/
+	mkdir -p etc/packaging/static/deploy/
+	cp bin/static/viam-server-windows.exe etc/packaging/static/deploy/viam-server-${BUILD_CHANNEL}-windows-${UNAME_M}
+	# note: the stable/latest file still has a .exe extension because we expect this to be a known URL that people download + want to have usable.
+	if [ "${RELEASE_TYPE}" = "stable" ] || [ "${RELEASE_TYPE}" = "latest" ]; then \
+		cp bin/static/viam-server-windows.exe etc/packaging/static/deploy/viam-server-${RELEASE_TYPE}-windows-${UNAME_M}.exe; \
+	fi
+
+	# note: GOOS=windows would break this on a linux runner
+	go run -tags no_cgo ./web/cmd/server --dump-resources win-resources.json
+
+	rm -rf etc/packaging/static/manifest/
+	mkdir -p etc/packaging/static/manifest/
+	go run ./etc/subsystem_manifest \
+		--binary-path etc/packaging/static/deploy/viam-server-${BUILD_CHANNEL}-windows-${UNAME_M} \
+		--upload-path packages.viam.com/apps/viam-server/${PRERELEASE_PATH}viam-server-${BUILD_CHANNEL}-windows-${UNAME_M} \
+		--version ${BUILD_CHANNEL} \
+		--arch ${UNAME_M} \
+		--resources-json win-resources.json \
+		--output-path etc/packaging/static/manifest/viam-server-${BUILD_CHANNEL}-windows-${UNAME_M}.json
+
+static-release-macos:
+	# HACK: rename all *.dylib dynamic libraries installed via Homebrew for nlopt-static and
+	# x264. We want to _statically_ link in these libraries to avoid viam-server users on
+	# MacOS having to `brew install` the libraries just to run the binary. Renaming the
+	# *.dylib files here should force clang/ld to select the .a files that will be present
+	# in the same directories.
+	for f in $(shell brew --prefix nlopt-static)/lib/*.dylib; do mv "$$f" "$$f.bak"; done
+	for f in $(shell brew --prefix x264)/lib/*.dylib; do mv "$$f" "$$f.bak"; done
+
+	# Now build viam-server as we normally would with `make server`.
+	make server
+
+	# Restore brew files to their previous state.
+	for f in $(shell brew --prefix nlopt-static)/lib/*.bak; do mv "$$f" "$${f%.bak}"; done
+	for f in $(shell brew --prefix x264)/lib/*.bak; do mv "$$f" "$${f%.bak}"; done
+
+	rm -rf etc/packaging/static/deploy/
+	mkdir -p etc/packaging/static/deploy/
+	cp bin/Darwin-arm64/viam-server etc/packaging/static/deploy/viam-server-${BUILD_CHANNEL}-darwin-aarch64
+	if [ "${RELEASE_TYPE}" = "stable" ] || [ "${RELEASE_TYPE}" = "latest" ]; then \
+		cp bin/Darwin-arm64/viam-server etc/packaging/static/deploy/viam-server-${RELEASE_TYPE}-darwin-aarch64; \
+	fi
+	rm -rf etc/packaging/static/manifest/
+	mkdir -p etc/packaging/static/manifest/
+	go run etc/subsystem_manifest/main.go \
+		--binary-path etc/packaging/static/deploy/viam-server-${BUILD_CHANNEL}-darwin-aarch64 \
+		--upload-path "packages.viam.com/apps/viam-server/${PRERELEASE_PATH}viam-server-${BUILD_CHANNEL}-darwin-aarch64" \
+		--version ${BUILD_CHANNEL} \
+		--arch aarch64 \
+		--output-path etc/packaging/static/manifest/viam-server-${BUILD_CHANNEL}-darwin-aarch64.json
