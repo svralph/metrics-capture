@@ -1,13 +1,13 @@
 {
   "$schema": "https://dl.viam.dev/module.schema.json",
-  "module_id": "bov:metricscapture",
+  "module_id": "sab-viam:metrics-capture",
   "visibility": "private",
-  "url": "https://github.com/YOUR_ORG/bov-2",
+  "url": "https://github.com/svralph/metrics-capture",
   "description": "A Viam generic service module for push-style arbitrary metrics capture with on-demand tabular upload.",
   "models": [
     {
       "api": "rdk:service:generic",
-      "model": "bov:metricscapture:service",
+      "model": "sab-viam:metricscapture:service",
       "short_description": "Push metrics service with DoCommand flush/stats."
     }
   ],
