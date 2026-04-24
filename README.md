@@ -1,6 +1,6 @@
-# bov-2
+# metrics capture
 
-`bov-2` is a starter Viam module for **arbitrary, push-style metrics capture**.
+`metrics-capture` is a starter Viam module for **arbitrary, push-style metrics capture**.
 
 It is designed for cases where your process produces event metrics (for example, command counts, loop counters, or latency samples) and you want to upload them to Viam on demand instead of relying on fixed polling intervals.
 
