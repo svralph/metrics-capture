@@ -9,7 +9,7 @@ import (
 	"go.viam.com/rdk/services/generic"
 )
 
-var Model = resource.NewModel("bov", "metricscapture", "service")
+var Model = resource.NewModel("sab-viam", "metricscapture", "service")
 
 func init() {
 	resource.RegisterService(generic.API, Model, resource.Registration[resource.Resource, *Config]{

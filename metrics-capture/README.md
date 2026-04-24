@@ -198,7 +198,7 @@ In your Viam machine config, add this module and service (replace placeholders w
     {
       "name": "metricscapture",
       "api": "rdk:service:generic",
-      "model": "bov:metricscapture:service",
+      "model": "sab-viam:metricscapture:service",
       "attributes": {
         "part_id": "YOUR_PART_ID",
         "component_type": "rdk:component:sensor",
